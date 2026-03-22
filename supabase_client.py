@@ -9,6 +9,9 @@ load_dotenv(dotenv_path=env_path)
 
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
+# DEBUG: print to logs
+print(f"DEBUG: SUPABASE_URL = {url}")
+print(f"DEBUG: SUPABASE_KEY = {key[:10]}...")  # only first 10 chars for safety
 
 # Create Supabase client
 supabase: Client = create_client(url, key)
