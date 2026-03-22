@@ -6,6 +6,11 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="HeartVigil AI", layout="wide")
 
+import os
+
+# Debug: show secrets on the page (remove after testing)
+st.sidebar.write(f"URL: {os.environ.get('SUPABASE_URL', 'NOT SET')}")
+st.sidebar.write(f"KEY (first 10 chars): {os.environ.get('SUPABASE_KEY', 'NOT SET')[:10]}")
 # Session state
 if "page" not in st.session_state:
     st.session_state.page = "dashboard"
