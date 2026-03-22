@@ -1,17 +1,5 @@
 import os
-from supabase import create_client, Client
-from dotenv import load_dotenv
-from pathlib import Path
+import streamlit as st
 
-# Load environment variables from .env file
-env_path = Path(__file__).parent / '.env'
-load_dotenv(dotenv_path=env_path)
-
-url: str = os.environ.get("SUPABASE_URL")
-key: str = os.environ.get("SUPABASE_KEY")
-# DEBUG: print to logs
-print(f"DEBUG: SUPABASE_URL = {url}")
-print(f"DEBUG: SUPABASE_KEY = {key[:10]}...")  # only first 10 chars for safety
-
-# Create Supabase client
-supabase: Client = create_client(url, key)
+url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
+key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
