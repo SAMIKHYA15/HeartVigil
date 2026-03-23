@@ -3,3 +3,6 @@ supabase
 python-dotenv
 pandas
 plotly
+joblib
+sklearn
+scikit-learn
