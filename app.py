@@ -1,19 +1,23 @@
 import streamlit as st
 from supabase_client import supabase
 from data_agent import save_health_data
+from risk_agent import doctor_ai_agent  # Ensure this exists or comment out
 import pandas as pd
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="HeartVigil AI", layout="wide")
 
-import os
-# Session state
+# ---------- SESSION STATE ----------
 if "page" not in st.session_state:
     st.session_state.page = "dashboard"
 if "auth_session" not in st.session_state:
     st.session_state.auth_session = None
+if "result" not in st.session_state:
+    st.session_state.result = None
+if "latest_data" not in st.session_state:
+    st.session_state.latest_data = None   # store last submitted data for chart
 
-# ---------- Authentication ----------
+# ---------- AUTHENTICATION ----------
 def check_session():
     return st.session_state.auth_session is not None
 
@@ -53,9 +57,11 @@ def login_signup():
 def logout():
     supabase.auth.sign_out()
     st.session_state.auth_session = None
+    st.session_state.result = None
+    st.session_state.latest_data = None
     st.rerun()
 
-# ---------- Main app ----------
+# ---------- MAIN ----------
 if not check_session():
     login_signup()
     st.stop()
@@ -63,7 +69,7 @@ if not check_session():
 user_id = st.session_state.auth_session.user.id
 user_email = st.session_state.auth_session.user.email
 
-# Sidebar navigation
+# Sidebar
 st.sidebar.write(f"Logged in as: {user_email}")
 if st.sidebar.button("Logout"):
     logout()
@@ -75,20 +81,78 @@ if st.sidebar.button("New Assessment"):
 if st.sidebar.button("History"):
     st.session_state.page = "history"
 
-# ---------- Dashboard page ----------
+# ---------- DASHBOARD ----------
 def show_dashboard():
     st.title("Your Heart Health Dashboard")
-    # Always show welcome screen
-    st.markdown("## Welcome to HeartVigil AI")
-    st.write("Get a personalized heart health assessment in minutes.")
-    if st.button("Start Your Assessment", type="primary"):
-        st.session_state.page = "assessment"
-        st.rerun()
 
-# ---------- Assessment page ----------
+    # If we have a stored result, show it
+    if st.session_state.result:
+        result = st.session_state.result
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Risk Level", result["risk_label"])
+            st.metric("Probability", f"{result['probability']}%")
+        with col2:
+            st.subheader("Why this risk?")
+            for r in result["reasons"]:
+                st.write(f"• {r}")
+
+        # Comparison chart for the latest submission
+        if st.session_state.latest_data:
+            st.subheader("Your Values vs Safe Ranges")
+            safe_limits = {
+                "trestbps": 120,
+                "chol": 200,
+                "thalach": 150,
+                "oldpeak": 1.0
+            }
+            chart_data = []
+            for field, limit in safe_limits.items():
+                val = st.session_state.latest_data.get(field)
+                if val is not None:
+                    if field in ["trestbps", "chol", "oldpeak"]:
+                        color = "green" if val <= limit else "red"
+                    else:
+                        color = "green" if val >= limit else "red"
+                    chart_data.append({
+                        "Field": field,
+                        "Your Value": val,
+                        "Safe Limit": limit,
+                        "Color": color
+                    })
+            if chart_data:
+                df_chart = pd.DataFrame(chart_data)
+                fig = go.Figure()
+                for _, row in df_chart.iterrows():
+                    fig.add_trace(go.Bar(
+                        name=row["Field"],
+                        x=[row["Field"]],
+                        y=[row["Your Value"]],
+                        marker_color=row["Color"],
+                        text=f"{row['Your Value']} (limit {row['Safe Limit']})",
+                        textposition="outside"
+                    ))
+                fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No data to display chart. Submit a new assessment.")
+
+        if st.button("Take New Assessment"):
+            st.session_state.page = "assessment"
+            st.rerun()
+    else:
+        # First-time user
+        st.markdown("## Welcome to HeartVigil AI")
+        st.write("Get a personalized heart health assessment in minutes.")
+        if st.button("Start Your Assessment", type="primary"):
+            st.session_state.page = "assessment"
+            st.rerun()
+
+# ---------- ASSESSMENT ----------
 def show_assessment():
     st.title("Heart Health Assessment")
-    st.markdown("Fill in your health details. All fields are optional for now.")
+    st.markdown("Fields marked with * are required. All fields are optional for now.")
+
     with st.form("health_form"):
         col1, col2 = st.columns(2)
         with col1:
@@ -106,8 +170,10 @@ def show_assessment():
             slope = st.selectbox("Slope of peak exercise ST segment", options=[(0,"Upsloping"), (1,"Flat"), (2,"Downsloping")], format_func=lambda x: x[1])[0]
             ca = st.number_input("Number of major vessels (0-3)", min_value=0, max_value=3, value=0)
             thal = st.selectbox("Thalassemia", options=[(1,"Normal"), (2,"Fixed defect"), (3,"Reversible defect")], format_func=lambda x: x[1])[0]
-        submitted = st.form_submit_button("Save Assessment")
+        submitted = st.form_submit_button("Analyse My Heart Health")
+
     if submitted:
+        # Prepare data dict
         data = {
             "age": age,
             "sex": sex,
@@ -123,18 +189,29 @@ def show_assessment():
             "ca": ca,
             "thal": thal
         }
-        success, result = save_health_data(data, user_id)
-        if success:
-            st.success("Assessment saved!")
-            st.session_state.page = "dashboard"
-            st.rerun()
-        else:
-            st.error(f"Error: {result}")
 
-# ---------- History page ----------
+        # Save to Supabase
+        success, result = save_health_data(data, user_id)
+        if not success:
+            st.error(f"Failed to save: {result}")
+            st.stop()
+
+        # Run AI agent (doctor_ai_agent should return dict with keys: risk_label, probability, reasons)
+        # If doctor_ai_agent is not ready, replace with dummy:
+        # doctor_result = {"risk_label": "LOW", "probability": 28, "reasons": ["Age within normal", "BP okay", "Cholesterol normal"]}
+        doctor_result = doctor_ai_agent(data)   # ensure this function exists
+
+        # Store in session state
+        st.session_state.result = doctor_result
+        st.session_state.latest_data = data   # for chart
+
+        st.success("Assessment complete!")
+        st.session_state.page = "dashboard"
+        st.rerun()
+
+# ---------- HISTORY ----------
 def show_history():
     st.title("Your Assessment History")
-    # Fetch all submissions for this user, sorted by newest first
     response = supabase.table("health_records")\
         .select("*")\
         .eq("user_id", user_id)\
@@ -150,9 +227,7 @@ def show_history():
             st.rerun()
         return
 
-    # Show last 5 in a table
     st.subheader("Recent Assessments (last 5)")
-    # Prepare a readable table
     history_data = []
     for rec in records:
         history_data.append({
@@ -167,14 +242,13 @@ def show_history():
     df = pd.DataFrame(history_data)
     st.table(df)
 
-    # Comparison chart for the latest submission
     st.subheader("Comparison Chart (Latest Assessment)")
     latest = records[0]
     safe_limits = {
-        "trestbps": 120,   # systolic BP <120 ideal
-        "chol": 200,       # cholesterol <200
-        "thalach": 150,    # max heart rate >150 good
-        "oldpeak": 1.0     # ST depression <1.0 normal
+        "trestbps": 120,
+        "chol": 200,
+        "thalach": 150,
+        "oldpeak": 1.0
     }
     chart_data = []
     for field, limit in safe_limits.items():
@@ -182,7 +256,7 @@ def show_history():
         if val is not None:
             if field in ["trestbps", "chol", "oldpeak"]:
                 color = "green" if val <= limit else "red"
-            else:  # thalach – higher is better
+            else:
                 color = "green" if val >= limit else "red"
             chart_data.append({
                 "Field": field,
@@ -207,7 +281,7 @@ def show_history():
     else:
         st.write("No numeric fields available for comparison.")
 
-# ---------- Page routing ----------
+# ---------- ROUTING ----------
 if st.session_state.page == "dashboard":
     show_dashboard()
 elif st.session_state.page == "assessment":
