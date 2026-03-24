@@ -6,4 +6,4 @@ plotly
 joblib
 scikit-learn
 pdfplumber
-google-generativeai
+groq

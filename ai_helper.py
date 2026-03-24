@@ -1,22 +1,33 @@
 import os
-from groq import Groq
 
-# Initialize Groq client
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+# Try to import Groq, but if it fails, set a flag
+try:
+    from groq import Groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
 
-def get_ai_response(prompt, model_name="llama-3.3-70b-versatile"):
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+def get_ai_response(prompt, model="llama-3.3-70b-versatile"):
     """
-    Generate AI response using Groq's free tier.
-    1000 requests/day, 30 req/min limit.
+    Generate AI response using Groq if available; otherwise return a friendly message.
     """
+    if not GROQ_AVAILABLE:
+        return "✨ (Demo) AI package not installed. In production, this would provide personalised health insights. ✨"
+    
+    if not GROQ_API_KEY:
+        return "✨ (Demo) Groq API key not configured. Please add it to your environment variables. ✨"
+    
     try:
+        client = Groq(api_key=GROQ_API_KEY)
         completion = client.chat.completions.create(
-            model=model_name,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=500
+            max_tokens=500,
         )
-        return completion.choices[0].message.content.strip()
+        return completion.choices[0].message.content
     except Exception as e:
-        print(f"AI error: {e}")
-        return "AI insights are currently unavailable. Please try again later."
+        print(f"Groq API error: {e}")
+        return "AI insights are temporarily unavailable. Please try again later."
