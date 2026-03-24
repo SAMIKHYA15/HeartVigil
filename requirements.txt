@@ -5,3 +5,5 @@ pandas
 plotly
 joblib
 scikit-learn
+pdfplumber
+google-generativeai
