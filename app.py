@@ -1,10 +1,10 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-# ✅ FIRST Streamlit command
+# ✅ FIRST Streamlit command – must be before any other st commands
 st.set_page_config(page_title="HeartVigil AI", layout="wide")
 
-# ✅ THEN JS fix
+# ✅ JS to convert hash fragment to query parameters (for password reset)
 components.html("""
 <script>
 const hash = window.location.hash.substring(1);
@@ -22,7 +22,6 @@ if (hash && !window.location.search.includes("access_token")) {
 </script>
 """, height=0)
 
-
 from supabase_client import supabase
 from data_agent import save_health_data
 from risk_agent import doctor_ai_agent
@@ -30,6 +29,7 @@ from reco_agent import generate_recommendations
 import monitor_agent
 import pandas as pd
 import plotly.graph_objects as go
+
 # ---------- CUSTOM STYLE ----------
 st.markdown("""
 <style>
@@ -43,8 +43,6 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
-
-st.set_page_config(page_title="HeartVigil AI", layout="wide")
 
 # ---------- SESSION STATE ----------
 if "page" not in st.session_state:
@@ -122,7 +120,7 @@ def login_signup():
 def show_reset_password():
     st.title("Reset Password")
     params = st.query_params
-    # Debug (remove later)
+    # Optional debug (remove later)
     # st.write("Debug:", dict(params))
 
     access_token = params.get("access_token")
