@@ -100,45 +100,42 @@ def show_reset_password():
     st.title("Reset Password")
     st.markdown("Enter your new password.")
 
-    # Get tokens from query parameters
-    access_token = st.query_params.get("access_token", None)
-    refresh_token = st.query_params.get("refresh_token", None)
+    # Get query parameters
+    query_params = st.query_params
+    st.write("Debug - Query params:", dict(query_params))  # Remove after debugging
 
-    if not access_token or not refresh_token:
-        st.error("Invalid or missing reset link. Please request a new password reset.")
-        if st.button("Back to Login"):
-            st.query_params.clear()
-            st.rerun()
-        return
+    access_token = query_params.get("access_token", None)
+    refresh_token = query_params.get("refresh_token", None)
 
-    # Set the session using the tokens (this logs the user in temporarily)
-    try:
-        supabase.auth.set_session(access_token, refresh_token)
-        st.session_state.auth_session = supabase.auth.get_session()
-    except Exception as e:
-        st.error(f"Invalid or expired link: {e}")
-        return
+    if access_token and refresh_token:
+        # Set the session using the tokens
+        try:
+            supabase.auth.set_session(access_token, refresh_token)
+            st.session_state.auth_session = supabase.auth.get_session()
+        except Exception as e:
+            st.error(f"Invalid or expired link: {e}")
+            return
 
-    with st.form("reset_form"):
-        new_password = st.text_input("New password", type="password")
-        confirm_password = st.text_input("Confirm password", type="password")
-        if st.form_submit_button("Update password"):
-            if new_password != confirm_password:
-                st.error("Passwords do not match.")
-            elif len(new_password) < 6:
-                st.error("Password must be at least 6 characters.")
-            else:
-                try:
-                    # Update user's password
-                    supabase.auth.update_user({"password": new_password})
-                    st.success("Password updated! You can now log in.")
-                    # Clear query parameters and log out to return to login page
-                    st.query_params.clear()
-                    supabase.auth.sign_out()
-                    st.session_state.auth_session = None
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to update password: {e}")
+        with st.form("reset_form"):
+            new_password = st.text_input("New password", type="password")
+            confirm_password = st.text_input("Confirm password", type="password")
+            if st.form_submit_button("Update password"):
+                if new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                elif len(new_password) < 6:
+                    st.error("Password must be at least 6 characters.")
+                else:
+                    try:
+                        supabase.auth.update_user({"password": new_password})
+                        st.success("Password updated! You can now log in.")
+                        # Clear the query params to avoid re-triggering
+                        st.query_params.clear()
+                        st.session_state.show_reset_popover = False
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to update password: {e}")
+    else:
+        st.info("No recovery link detected. Please use the link from your email.")
 
 def logout():
     supabase.auth.sign_out()
@@ -149,8 +146,10 @@ def logout():
     st.rerun()
 
 # ---------- MAIN ----------
-# Check if we are in password reset flow (presence of access_token query param)
-if st.query_params.get("access_token"):
+# Check for reset password token first
+query_params = st.query_params
+if query_params.get("access_token") or query_params.get("refresh_token") or query_params.get("type") == "recovery":
+    # Show reset password page
     show_reset_password()
     st.stop()
 
