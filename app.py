@@ -1,4 +1,6 @@
 import streamlit as st
+import streamlit.components.v1 as components   # ✅ MUST BE HERE
+
 from supabase_client import supabase
 from data_agent import save_health_data
 from risk_agent import doctor_ai_agent
