@@ -6,7 +6,22 @@ from reco_agent import generate_recommendations
 import monitor_agent
 import pandas as pd
 import plotly.graph_objects as go
+components.html("""
+<script>
+const hash = window.location.hash.substring(1);
 
+if (hash && !window.location.search.includes("access_token")) {
+    const url = new URL(window.location);
+    const params = new URLSearchParams(hash);
+
+    params.forEach((value, key) => {
+        url.searchParams.set(key, value);
+    });
+
+    window.location.replace(url.toString()); // ✅ prevents loop
+}
+</script>
+""", height=0)
 # ---------- CUSTOM STYLE ----------
 st.markdown("""
 <style>
