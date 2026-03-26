@@ -7,7 +7,7 @@ import monitor_agent
 import pandas as pd
 import plotly.graph_objects as go
 
-# Inject custom CSS for purple buttons
+# ---------- CUSTOM STYLE ----------
 st.markdown("""
 <style>
 .stButton > button {
@@ -34,6 +34,8 @@ if "latest_data" not in st.session_state:
     st.session_state.latest_data = None
 if "extracted" not in st.session_state:
     st.session_state.extracted = {}
+if "show_reset_popover" not in st.session_state:
+    st.session_state.show_reset_popover = False
 
 # ---------- AUTHENTICATION ----------
 def check_session():
@@ -42,43 +44,42 @@ def check_session():
 def login_signup():
     st.title("HeartVigil AI")
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
+
     with tab1:
         email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
 
-        # Forgot password link
-        col_forgot, _ = st.columns([1, 3])
-        with col_forgot:
-            if st.button("Forgot password?"):
-                st.session_state.show_reset_popover = True
+        if st.button("Forgot password?"):
+            st.session_state.show_reset_popover = True
 
         if st.button("Login"):
             try:
                 res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                if hasattr(res, 'session') and res.session:
+                if res.session:
                     st.session_state.auth_session = res.session
                     supabase.auth.set_session(res.session.access_token, res.session.refresh_token)
                     st.rerun()
                 else:
-                    st.error("Login failed: no session returned")
+                    st.error("Login failed")
             except Exception as e:
                 st.error(f"Login failed: {e}")
 
-        # Popover for password reset
-        if st.session_state.get("show_reset_popover", False):
-            with st.popover("Reset password", width='stretch'):
-                reset_email = st.text_input("Enter your email address")
+        if st.session_state.show_reset_popover:
+            with st.popover("Reset password"):
+                reset_email = st.text_input("Enter your email")
                 if st.button("Send reset link"):
                     try:
-                        supabase.auth.reset_password_for_email(reset_email)
-                        st.success("Password reset email sent! Please check your inbox.")
+                        # Replace with your deployed app URL
+                        supabase.auth.reset_password_for_email(
+                            reset_email,
+                            {"redirect_to": "https://heartvigil-15.streamlit.app"}
+                        )
+                        st.success("✅ Reset email sent!")
                         st.session_state.show_reset_popover = False
-                        st.rerun()
                     except Exception as e:
-                        st.error(f"Failed to send reset email: {e}")
+                        st.error(f"Error: {e}")
                 if st.button("Cancel"):
                     st.session_state.show_reset_popover = False
-                    st.rerun()
 
     with tab2:
         email = st.text_input("Email", key="signup_email")
@@ -86,34 +87,37 @@ def login_signup():
         if st.button("Sign Up"):
             try:
                 res = supabase.auth.sign_up({"email": email, "password": password})
-                if hasattr(res, 'session') and res.session:
+                if res.session:
                     st.session_state.auth_session = res.session
-                    supabase.auth.set_session(res.session.access_token, res.session.refresh_token)
                     st.success("Account created! You are now logged in.")
                     st.rerun()
                 else:
-                    st.error("Sign up failed: no session returned. Email may already exist.")
+                    st.error("Signup failed")
             except Exception as e:
-                st.error(f"Sign up failed: {e}")
+                st.error(f"Signup failed: {e}")
 
 def show_reset_password():
     st.title("Reset Password")
-    st.markdown("Enter your new password.")
+    params = st.query_params
+    # Debug (remove later)
+    # st.write("Debug:", dict(params))
 
-    # Get query parameters
-    query_params = st.query_params
-    st.write("Debug - Query params:", dict(query_params))  # Remove after debugging
+    access_token = params.get("access_token")
+    refresh_token = params.get("refresh_token")
+    token = params.get("token")
+    type_param = params.get("type")
 
-    access_token = query_params.get("access_token", None)
-    refresh_token = query_params.get("refresh_token", None)
-
-    if access_token and refresh_token:
-        # Set the session using the tokens
+    if type_param == "recovery" or access_token or token:
         try:
-            supabase.auth.set_session(access_token, refresh_token)
-            st.session_state.auth_session = supabase.auth.get_session()
+            if access_token and refresh_token:
+                supabase.auth.set_session(access_token, refresh_token)
+            elif token:
+                supabase.auth.verify_otp({"token": token, "type": "recovery"})
+            else:
+                st.error("Invalid link")
+                return
         except Exception as e:
-            st.error(f"Invalid or expired link: {e}")
+            st.error(f"Session error: {e}")
             return
 
         with st.form("reset_form"):
@@ -121,43 +125,42 @@ def show_reset_password():
             confirm_password = st.text_input("Confirm password", type="password")
             if st.form_submit_button("Update password"):
                 if new_password != confirm_password:
-                    st.error("Passwords do not match.")
+                    st.error("Passwords do not match")
                 elif len(new_password) < 6:
-                    st.error("Password must be at least 6 characters.")
+                    st.error("Minimum 6 characters required")
                 else:
                     try:
                         supabase.auth.update_user({"password": new_password})
-                        st.success("Password updated! You can now log in.")
-                        # Clear the query params to avoid re-triggering
+                        st.success("✅ Password updated successfully!")
                         st.query_params.clear()
-                        st.session_state.show_reset_popover = False
+                        st.session_state.auth_session = None
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Failed to update password: {e}")
+                        st.error(f"Update failed: {e}")
     else:
-        st.info("No recovery link detected. Please use the link from your email.")
+        st.error("Invalid or expired reset link")
 
 def logout():
     supabase.auth.sign_out()
     st.session_state.auth_session = None
-    st.session_state.result = None
-    st.session_state.latest_data = None
-    st.session_state.extracted = {}
     st.rerun()
 
-# ---------- MAIN ----------
-# Check for reset password token first
-query_params = st.query_params
-if query_params.get("access_token") or query_params.get("refresh_token") or query_params.get("type") == "recovery":
-    # Show reset password page
+# ---------- ROUTING ----------
+params = st.query_params
+if (
+    params.get("access_token")
+    or params.get("refresh_token")
+    or params.get("type") == "recovery"
+    or params.get("token")
+):
     show_reset_password()
     st.stop()
 
-# Otherwise, normal authentication
 if not check_session():
     login_signup()
     st.stop()
 
+# ---------- LOGGED IN – FULL APP ----------
 user_id = st.session_state.auth_session.user.id
 user_email = st.session_state.auth_session.user.email
 user_created_at = st.session_state.auth_session.user.created_at
