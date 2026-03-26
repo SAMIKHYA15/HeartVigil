@@ -4,7 +4,6 @@ from data_agent import save_health_data
 from risk_agent import doctor_ai_agent
 from reco_agent import generate_recommendations
 import monitor_agent
-from ai_helper import get_ai_response
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -33,6 +32,8 @@ if "result" not in st.session_state:
     st.session_state.result = None
 if "latest_data" not in st.session_state:
     st.session_state.latest_data = None
+if "extracted" not in st.session_state:
+    st.session_state.extracted = {}
 
 # ---------- AUTHENTICATION ----------
 def check_session():
@@ -44,6 +45,13 @@ def login_signup():
     with tab1:
         email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
+
+        # Forgot password link
+        col_forgot, _ = st.columns([1, 3])
+        with col_forgot:
+            if st.button("Forgot password?"):
+                st.session_state.show_reset_popover = True
+
         if st.button("Login"):
             try:
                 res = supabase.auth.sign_in_with_password({"email": email, "password": password})
@@ -55,6 +63,23 @@ def login_signup():
                     st.error("Login failed: no session returned")
             except Exception as e:
                 st.error(f"Login failed: {e}")
+
+        # Popover for password reset
+        if st.session_state.get("show_reset_popover", False):
+            with st.popover("Reset password", width='stretch'):
+                reset_email = st.text_input("Enter your email address")
+                if st.button("Send reset link"):
+                    try:
+                        supabase.auth.reset_password_for_email(reset_email)
+                        st.success("Password reset email sent! Please check your inbox.")
+                        st.session_state.show_reset_popover = False
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to send reset email: {e}")
+                if st.button("Cancel"):
+                    st.session_state.show_reset_popover = False
+                    st.rerun()
+
     with tab2:
         email = st.text_input("Email", key="signup_email")
         password = st.text_input("Password", type="password", key="signup_password")
@@ -71,14 +96,61 @@ def login_signup():
             except Exception as e:
                 st.error(f"Sign up failed: {e}")
 
+def show_reset_password():
+    st.title("Reset Password")
+    st.markdown("Enter your new password.")
+
+    # Get the token from query parameters (Supabase sends access_token and refresh_token)
+    access_token = st.query_params.get("access_token", None)
+    refresh_token = st.query_params.get("refresh_token", None)
+
+    if access_token and refresh_token:
+        # Set the session using the tokens
+        try:
+            supabase.auth.set_session(access_token, refresh_token)
+            st.session_state.auth_session = supabase.auth.get_session()
+        except Exception as e:
+            st.error(f"Invalid or expired link: {e}")
+            return
+
+        with st.form("reset_form"):
+            new_password = st.text_input("New password", type="password")
+            confirm_password = st.text_input("Confirm password", type="password")
+            if st.form_submit_button("Update password"):
+                if new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                elif len(new_password) < 6:
+                    st.error("Password must be at least 6 characters.")
+                else:
+                    try:
+                        # Update user's password
+                        supabase.auth.update_user({"password": new_password})
+                        st.success("Password updated! You can now log in.")
+                        # Clear the query params to avoid re-triggering
+                        st.query_params.clear()
+                        st.session_state.show_reset_popover = False
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to update password: {e}")
+    else:
+        st.info("No recovery link detected. Please use the link from your email.")
+
 def logout():
     supabase.auth.sign_out()
     st.session_state.auth_session = None
     st.session_state.result = None
     st.session_state.latest_data = None
+    st.session_state.extracted = {}
     st.rerun()
 
 # ---------- MAIN ----------
+# Check for reset password token first
+if st.query_params.get("type") == "recovery" or st.query_params.get("access_token"):
+    # Show reset password page
+    show_reset_password()
+    st.stop()
+
+# Otherwise, normal authentication
 if not check_session():
     login_signup()
     st.stop()
@@ -94,7 +166,7 @@ with top_col1:
 with top_col2:
     st.title("HeartVigil AI")
 with top_col3:
-    with st.popover("👤 Profile", use_container_width=True):
+    with st.popover("👤 Profile", width='stretch'):
         st.write(f"**Email:** {user_email}")
         if user_created_at:
             st.write(f"**Joined:** {user_created_at.strftime('%Y-%m-%d')}")
@@ -119,6 +191,77 @@ with st.sidebar:
     st.markdown("---")
     st.caption("⚠️ Educational demo. Not for medical use.")
 
+# ---------- VALIDATION RANGES ----------
+VALID_RANGES = {
+    "age": (1, 100),
+    "sex": (0, 1),
+    "cp": (0, 3),
+    "trestbps": (80, 200),
+    "chol": (100, 600),
+    "fbs": (0, 1),
+    "restecg": (0, 2),
+    "thalach": (60, 220),
+    "exang": (0, 1),
+    "oldpeak": (0.0, 6.2),
+    "slope": (0, 2),
+    "ca": (0, 3),
+    "thal": (1, 3)
+}
+
+# ---------- HELPER: validate and clean extracted values ----------
+def validate_and_clean_extracted(extracted):
+    cleaned = {}
+    invalid = []
+    for field, (low, high) in VALID_RANGES.items():
+        val = extracted.get(field)
+        if val is None:
+            cleaned[field] = None
+            continue
+        if field == "sex" and isinstance(val, str):
+            lower_val = val.lower()
+            if lower_val in ["male", "m"]:
+                val = 1
+            elif lower_val in ["female", "f"]:
+                val = 0
+            else:
+                invalid.append(field)
+                cleaned[field] = None
+                continue
+        try:
+            if isinstance(val, str):
+                if '.' in val:
+                    val = float(val)
+                else:
+                    val = int(val)
+        except:
+            invalid.append(field)
+            cleaned[field] = None
+            continue
+        if isinstance(val, (int, float)):
+            if low <= val <= high:
+                cleaned[field] = val
+            else:
+                invalid.append(field)
+                cleaned[field] = None
+        else:
+            invalid.append(field)
+            cleaned[field] = None
+    return cleaned, invalid
+
+def validate_all_fields(data):
+    errors = []
+    for field, (low, high) in VALID_RANGES.items():
+        if field in data:
+            val = data[field]
+            if val is None:
+                continue
+            if isinstance(val, (int, float)):
+                if val < low or val > high:
+                    errors.append(f"{field} value {val} is outside the allowed range ({low}–{high})")
+            else:
+                errors.append(f"{field} must be a number")
+    return len(errors) == 0, errors
+
 # ---------- DASHBOARD ----------
 def show_dashboard():
     st.title("Your Heart Health Dashboard")
@@ -129,11 +272,11 @@ def show_dashboard():
         with col1:
             risk_label = result["risk_label"]
             if risk_label == "LOW":
-                color = "#10B981"      # green
+                color = "#10B981"
             elif risk_label == "MEDIUM":
-                color = "#F59E0B"      # yellow
+                color = "#F59E0B"
             else:
-                color = "#EF4444"      # red
+                color = "#EF4444"
             st.markdown(f"<h2 style='color:{color};'>Risk: {risk_label}</h2>", unsafe_allow_html=True)
             st.metric("Probability", f"{result['probability']:.1f}%")
         with col2:
@@ -160,7 +303,7 @@ def show_dashboard():
                             color = "#F59E0B"
                         else:
                             color = "#EF4444"
-                    else:  # higher is better
+                    else:
                         if val >= limit:
                             color = "#10B981"
                         elif val >= limit * 0.9:
@@ -186,7 +329,7 @@ def show_dashboard():
                         textposition="outside"
                     ))
                 fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             else:
                 st.info("No numeric fields available for chart.")
         else:
@@ -207,29 +350,108 @@ def show_assessment():
     st.title("Heart Health Assessment")
     st.markdown("Fields marked with * are required.")
 
-    # Optional PDF upload placeholder
-    st.markdown("### Upload Medical Report (PDF)")
-    uploaded_file = st.file_uploader("Typed/digital PDF only. Values will be pre-filled below.", type=["pdf"])
+    # PDF Upload Section
+    uploaded_file = st.file_uploader("Upload a digital medical report (PDF)", type=["pdf"], key="pdf_uploader")
     if uploaded_file is not None:
-        st.info("PDF upload is a placeholder – extraction not yet implemented.")
+        with st.spinner("Reading and extracting data from PDF..."):
+            from pdf_extractor import parse_pdf_health_data
+            extracted = parse_pdf_health_data(uploaded_file)
+            if extracted:
+                cleaned, invalid_fields = validate_and_clean_extracted(extracted)
+                if invalid_fields:
+                    st.warning(f"The following extracted values are outside valid ranges and have been discarded: {', '.join(invalid_fields)}. Please fill them manually.")
+                compulsory_fields = ["age", "sex", "cp", "trestbps", "chol", "thalach", "exang"]
+                missing = [f for f in compulsory_fields if cleaned.get(f) is None]
+                if missing:
+                    st.warning(f"PDF is missing compulsory fields: {', '.join(missing)}. Please fill the form manually.")
+                    st.session_state.extracted = {}
+                else:
+                    st.session_state.extracted = cleaned
+                    st.success("Extraction complete! Review the values below and edit if needed.")
+            else:
+                st.warning("No data could be extracted. Please fill the form manually.")
+                st.session_state.extracted = {}
+
+    if st.session_state.extracted:
+        st.subheader("Extracted Values (review and edit)")
+        display_dict = {k: (v if v is not None else "N/A") for k, v in st.session_state.extracted.items()}
+        df = pd.DataFrame([display_dict]).T.reset_index()
+        df.columns = ["Field", "Value"]
+        st.table(df)
+        st.info("If any value is missing or incorrect, please fill it in the form below.")
 
     with st.form("health_form"):
+        def safe_get(field, default, min_val=None, max_val=None, is_float=False):
+            val = st.session_state.extracted.get(field, default)
+            if val is None:
+                return default
+            if is_float:
+                try:
+                    val = float(val)
+                except:
+                    return default
+            else:
+                try:
+                    val = int(val)
+                except:
+                    return default
+            return val
+
         col1, col2 = st.columns(2)
+
         with col1:
-            age = st.number_input("Age *", min_value=1, max_value=100, value=50)
-            sex = st.selectbox("Sex *", options=[(0,"Female"), (1,"Male")], format_func=lambda x: x[1])[0]
-            cp = st.selectbox("Chest pain type *", options=[(0,"Typical angina"), (1,"Atypical angina"), (2,"Non-anginal pain"), (3,"Asymptomatic")], format_func=lambda x: x[1])[0]
-            trestbps = st.number_input("Resting blood pressure (mm Hg) *", min_value=80, max_value=200, value=120)
-            chol = st.number_input("Cholesterol (mg/dl) *", min_value=100, max_value=600, value=200)
-            fbs = st.selectbox("Fasting blood sugar > 120 mg/dl", options=[(0,"No"), (1,"Yes")], format_func=lambda x: x[1])[0]
-            restecg = st.selectbox("Resting ECG results", options=[(0,"Normal"), (1,"ST-T abnormality"), (2,"Left ventricular hypertrophy")], format_func=lambda x: x[1])[0]
+            age = st.number_input("Age *", min_value=1, max_value=100,
+                                  value=safe_get("age", 50, min_val=1, max_val=100))
+            sex_options = ["Female", "Male"]
+            sex_index = safe_get("sex", 0, min_val=0, max_val=1)
+            sex_label = st.selectbox("Sex *", options=sex_options, index=sex_index)
+            sex = 1 if sex_label == "Male" else 0
+
+            cp_options = ["Typical angina", "Atypical angina", "Non-anginal pain", "Asymptomatic"]
+            cp_index = safe_get("cp", 0, min_val=0, max_val=3)
+            cp_label = st.selectbox("Chest pain type *", options=cp_options, index=cp_index)
+            cp = cp_index
+
+            trestbps = st.number_input("Resting blood pressure (mm Hg) *", min_value=80, max_value=200,
+                                       value=safe_get("trestbps", 120, min_val=80, max_val=200))
+            chol = st.number_input("Cholesterol (mg/dl) *", min_value=100, max_value=600,
+                                   value=safe_get("chol", 200, min_val=100, max_val=600))
+
+            fbs_options = ["No", "Yes"]
+            fbs_index = safe_get("fbs", 0, min_val=0, max_val=1)
+            fbs_label = st.selectbox("Fasting blood sugar > 120 mg/dl", options=fbs_options, index=fbs_index)
+            fbs = fbs_index
+
+            restecg_options = ["Normal", "ST-T abnormality", "Left ventricular hypertrophy"]
+            restecg_index = safe_get("restecg", 0, min_val=0, max_val=2)
+            restecg_label = st.selectbox("Resting ECG results", options=restecg_options, index=restecg_index)
+            restecg = restecg_index
+
         with col2:
-            thalach = st.number_input("Max heart rate achieved *", min_value=60, max_value=220, value=150)
-            exang = st.selectbox("Exercise induced angina *", options=[(0,"No"), (1,"Yes")], format_func=lambda x: x[1])[0]
-            oldpeak = st.number_input("ST depression induced by exercise", min_value=0.0, max_value=6.2, value=1.0, step=0.1)
-            slope = st.selectbox("Slope of peak exercise ST segment", options=[(0,"Upsloping"), (1,"Flat"), (2,"Downsloping")], format_func=lambda x: x[1])[0]
-            ca = st.number_input("Number of major vessels (0-3)", min_value=0, max_value=3, value=0)
-            thal = st.selectbox("Thalassemia", options=[(1,"Normal"), (2,"Fixed defect"), (3,"Reversible defect")], format_func=lambda x: x[1])[0]
+            thalach = st.number_input("Max heart rate achieved *", min_value=60, max_value=220,
+                                      value=safe_get("thalach", 150, min_val=60, max_val=220))
+            exang_options = ["No", "Yes"]
+            exang_index = safe_get("exang", 0, min_val=0, max_val=1)
+            exang_label = st.selectbox("Exercise induced angina *", options=exang_options, index=exang_index)
+            exang = exang_index
+
+            oldpeak = st.number_input("ST depression induced by exercise", min_value=0.0, max_value=6.2,
+                                      value=float(safe_get("oldpeak", 1.0, min_val=0, max_val=6.2, is_float=True)),
+                                      step=0.1)
+
+            slope_options = ["Upsloping", "Flat", "Downsloping"]
+            slope_index = safe_get("slope", 0, min_val=0, max_val=2)
+            slope_label = st.selectbox("Slope of peak exercise ST segment", options=slope_options, index=slope_index)
+            slope = slope_index
+
+            ca = st.number_input("Number of major vessels (0-3)", min_value=0, max_value=3,
+                                 value=safe_get("ca", 0, min_val=0, max_val=3))
+
+            thal_options = ["Normal", "Fixed defect", "Reversible defect"]
+            thal_index = safe_get("thal", 1, min_val=1, max_val=3) - 1
+            thal_label = st.selectbox("Thalassemia", options=thal_options, index=thal_index)
+            thal = thal_index + 1
+
         submitted = st.form_submit_button("Analyse My Heart Health")
 
     if submitted:
@@ -254,6 +476,12 @@ def show_assessment():
             "thal": thal
         }
 
+        valid, errors = validate_all_fields(data)
+        if not valid:
+            for err in errors:
+                st.error(err)
+            st.stop()
+
         success, result = save_health_data(data, user_id)
         if not success:
             st.error(f"Failed to save: {result}")
@@ -262,12 +490,13 @@ def show_assessment():
         doctor_result = doctor_ai_agent(data)
         st.session_state.result = doctor_result
         st.session_state.latest_data = data
+        st.session_state.extracted = {}
 
         st.success("Assessment complete!")
         st.session_state.page = "dashboard"
         st.rerun()
 
-# ---------- DATA AGENT (HISTORY + AI SUMMARY) ----------
+# ---------- DATA AGENT (HISTORY) ----------
 def show_data_agent():
     st.title("Data Agent – Your Health Records")
     response = supabase.table("health_records")\
@@ -285,8 +514,8 @@ def show_data_agent():
             st.rerun()
         return
 
-    # AI summary of trends
     if len(records) >= 2:
+        from ai_helper import get_ai_response
         prompt = f"Summarize the health trends of a user from these records: {records}"
         summary = get_ai_response(prompt)
         if summary:
@@ -322,18 +551,18 @@ def show_data_agent():
         if val is not None:
             if direction == "lower":
                 if val <= limit:
-                    color = "#10B981"        # green
+                    color = "#10B981"
                 elif val <= limit * 1.1:
-                    color = "#F59E0B"        # yellow
+                    color = "#F59E0B"
                 else:
-                    color = "#EF4444"        # red
+                    color = "#EF4444"
             else:
                 if val >= limit:
-                    color = "#10B981"        # green
+                    color = "#10B981"
                 elif val >= limit * 0.9:
-                    color = "#F59E0B"        # yellow
+                    color = "#F59E0B"
                 else:
-                    color = "#EF4444"        # red
+                    color = "#EF4444"
             chart_data.append({
                 "Field": label,
                 "Your Value": val,
@@ -353,7 +582,7 @@ def show_data_agent():
                 textposition="outside"
             ))
         fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     else:
         st.write("No numeric fields available for comparison.")
 
@@ -418,7 +647,7 @@ def show_risk_analysis():
         }
     ))
     fig.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     st.markdown(f"<h2 style='text-align: center; color:{label_color};'>Risk Level: {risk_label}</h2>",
                 unsafe_allow_html=True)
@@ -436,12 +665,11 @@ def show_risk_analysis():
         st.session_state.page = "assessment"
         st.rerun()
 
-# ---------- MONITORING (ENHANCED) ----------
+# ---------- MONITORING ----------
 def show_monitoring():
     st.title("📈 Health Monitoring & Trends")
     st.markdown("Track your health metrics over time and receive early warnings.")
 
-    # Date range picker
     col1, col2 = st.columns(2)
     with col1:
         start_date = st.date_input("Start date", value=None, key="start_date")
@@ -458,7 +686,6 @@ def show_monitoring():
             st.rerun()
         return
 
-    # Key Metrics Cards
     st.subheader("Key Metrics")
     metrics = ["trestbps", "chol", "thalach", "oldpeak"]
     metric_labels = {
@@ -471,16 +698,14 @@ def show_monitoring():
     for i, metric in enumerate(metrics):
         latest, percent, symbol = monitor_agent.compute_trends(records, metric)
         if latest is not None:
-            # Determine colour
             if metric in ["trestbps", "chol", "oldpeak"]:
-                # lower is better
                 if percent > 0:
                     color = "#EF4444"
                 elif percent < 0:
                     color = "#10B981"
                 else:
                     color = "#F59E0B"
-            else:  # thalach – higher is better
+            else:
                 if percent > 0:
                     color = "#10B981"
                 elif percent < 0:
@@ -499,7 +724,6 @@ def show_monitoring():
             with cols[i]:
                 st.metric(label=metric_labels[metric], value="N/A")
 
-    # Comparison Chart (latest vs safe ranges)
     st.subheader("📊 Latest Values vs Safe Ranges")
     latest = records[-1]
     chart_data = monitor_agent.generate_comparison_data(latest)
@@ -530,11 +754,10 @@ def show_monitoring():
                 textposition="outside"
             ))
         fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False, height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     else:
         st.info("No numeric fields available for comparison.")
 
-    # Trend Chart
     if len(records) > 1:
         st.subheader("📈 Trends Over Time")
         metric = st.selectbox("Select a metric", metrics, format_func=lambda x: metric_labels[x])
@@ -561,7 +784,7 @@ def show_monitoring():
                     hovermode='x unified',
                     height=450
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             else:
                 st.warning(f"No data available for {metric_labels[metric]}")
         else:
@@ -569,7 +792,6 @@ def show_monitoring():
     else:
         st.info("You have only one assessment. After your second assessment, you'll see trend charts here.")
 
-    # Alerts
     alerts = monitor_agent.detect_trends(records)
     if alerts:
         st.subheader("🔔 Alerts & Insights")
@@ -582,7 +804,6 @@ def show_monitoring():
     else:
         st.success("No concerning trends detected. Keep up the good work!")
 
-    # AI Summary
     if len(records) >= 2:
         st.subheader("🤖 AI Summary")
         with st.spinner("Generating insights..."):

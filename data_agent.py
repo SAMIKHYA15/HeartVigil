@@ -27,27 +27,23 @@ class DataAgent:
 
     @staticmethod
     def _convert_sex(value):
-        """Convert "Male"/"Female" to 1/0 for storage."""
+        """Convert 'Male'/'Female' (case‑insensitive) to 1/0."""
         if isinstance(value, str):
             lower = value.lower()
-            if lower == "male":
+            if lower in ["male", "m"]:
                 return 1
-            elif lower == "female":
+            elif lower in ["female", "f"]:
                 return 0
         return value
 
     @staticmethod
     def validate_value(field: str, value: Any) -> Tuple[bool, Optional[str], Optional[Any]]:
-        """
-        Validate a single field against its rules.
-        Returns (is_valid, error_message, converted_value)
-        """
         if field not in DataAgent.VALIDATION_RULES:
             return True, None, value
 
         rules = DataAgent.VALIDATION_RULES[field]
 
-        # Special handling for sex: convert string to int if needed
+        # Special handling for sex (convert string to int)
         if field == "sex":
             value = DataAgent._convert_sex(value)
 
@@ -72,7 +68,6 @@ class DataAgent:
 
             if "allowed" in rules:
                 if value not in rules["allowed"]:
-                    # Provide a user-friendly allowed list
                     allowed_str = [str(x) for x in rules["allowed"]]
                     return False, f"{field} must be one of {', '.join(allowed_str)}", None
 
@@ -88,10 +83,6 @@ class DataAgent:
 
     @staticmethod
     def validate_all(data: Dict[str, Any]) -> Tuple[bool, Optional[str], Dict[str, Any]]:
-        """
-        Validate all fields in the data dictionary.
-        Returns (is_valid, error_message, cleaned_data)
-        """
         cleaned = {}
         # Check required fields exist
         for required_field in DataAgent.REQUIRED_FIELDS:
@@ -112,12 +103,6 @@ class DataAgent:
 
     @staticmethod
     def save_health_data(data: Dict[str, Any], user_id: str, source: str = "manual") -> Tuple[bool, Any]:
-        """
-        Validate and save health data to Supabase.
-
-        Returns:
-            (success, result_or_error_message)
-        """
         # Validation and cleaning
         is_valid, error_message, cleaned_data = DataAgent.validate_all(data)
         if not is_valid:
@@ -156,7 +141,6 @@ class DataAgent:
 
     @staticmethod
     def get_user_records(user_id: str, limit: int = 100) -> Tuple[bool, Any]:
-        """Retrieve health records for a specific user."""
         try:
             result = supabase.table("health_records")\
                 .select("*")\
@@ -170,7 +154,6 @@ class DataAgent:
 
     @staticmethod
     def get_latest_record(user_id: str) -> Tuple[bool, Any]:
-        """Get the most recent health record for a user."""
         try:
             result = supabase.table("health_records")\
                 .select("*")\
