@@ -123,6 +123,9 @@ def login_signup():
 def show_reset_password():
     st.title("Reset Password")
     params = st.query_params
+    st.write("🔍 Params in reset page:", dict(params))   # temporary debug
+    st.title("Reset Password")
+    params = st.query_params
 
     access_token = params.get("access_token")
     refresh_token = params.get("refresh_token")
