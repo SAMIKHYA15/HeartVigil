@@ -1,27 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
-
-# ✅ FIRST Streamlit command – must be before any other st commands
-st.set_page_config(page_title="HeartVigil AI", layout="wide")
-
-# ✅ JS to convert hash fragment to query parameters (for password reset)
-components.html("""
-<script>
-const hash = window.location.hash.substring(1);
-
-if (hash && !window.location.search.includes("access_token")) {
-    const url = new URL(window.location);
-    const params = new URLSearchParams(hash);
-
-    params.forEach((value, key) => {
-        url.searchParams.set(key, value);
-    });
-
-    window.location.replace(url.toString());
-}
-</script>
-""", height=0)
-
 from supabase_client import supabase
 from data_agent import save_health_data
 from risk_agent import doctor_ai_agent
@@ -31,6 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # ---------- CUSTOM STYLE ----------
+st.set_page_config(page_title="HeartVigil AI", layout="wide")
+
 st.markdown("""
 <style>
 .stButton > button {
@@ -90,12 +69,12 @@ def login_signup():
                 reset_email = st.text_input("Enter your email")
                 if st.button("Send reset link"):
                     try:
-                        # Replace with your deployed app URL
+                        # ✅ Force query parameters by adding a dummy query string
                         supabase.auth.reset_password_for_email(
                             reset_email,
-                            {"redirect_to": "https://heartvigil-15.streamlit.app"}
+                            {"redirect_to": "https://heartvigil-15.streamlit.app?reset=true"}
                         )
-                        st.success("✅ Reset email sent!")
+                        st.success("✅ Reset email sent! Check your inbox.")
                         st.session_state.show_reset_popover = False
                     except Exception as e:
                         st.error(f"Error: {e}")
@@ -120,8 +99,6 @@ def login_signup():
 def show_reset_password():
     st.title("Reset Password")
     params = st.query_params
-    # Optional debug (remove later)
-    # st.write("Debug:", dict(params))
 
     access_token = params.get("access_token")
     refresh_token = params.get("refresh_token")
