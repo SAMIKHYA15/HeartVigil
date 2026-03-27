@@ -1,3 +1,5 @@
+# --- DEBUG: show query params on all pages ---
+st.write("🔍 Query params:", dict(st.query_params))
 import streamlit as st
 from supabase_client import supabase
 from data_agent import save_health_data
