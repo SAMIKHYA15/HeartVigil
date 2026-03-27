@@ -96,7 +96,7 @@ def login_signup():
                         # ✅ Force query parameters by adding a dummy query string
                         supabase.auth.reset_password_for_email(
                             reset_email,
-                            {"redirect_to": "https://heartvigil-15.streamlit.app?reset=true"}
+                            {"redirect_to": "https://heartvigil-15.streamlit.app"}
                         )
                         st.success("✅ Reset email sent! Check your inbox.")
                         st.session_state.show_reset_popover = False
