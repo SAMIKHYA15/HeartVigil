@@ -1,28 +1,27 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-# Must be the first Streamlit command
+# ✅ FIRST Streamlit command – must be before any other st commands
 st.set_page_config(page_title="HeartVigil AI", layout="wide")
 
-# --- DEBUG: show query params on all pages (you can remove this later) ---
-st.write("🔍 Query params:", dict(st.query_params))
-
-# --- Convert URL hash (#) to query parameters (for password reset links) ---
+# ✅ JS to convert hash fragment to query parameters (for password reset)
 components.html("""
 <script>
 const hash = window.location.hash.substring(1);
+
 if (hash && !window.location.search.includes("access_token")) {
     const url = new URL(window.location);
     const params = new URLSearchParams(hash);
+
     params.forEach((value, key) => {
         url.searchParams.set(key, value);
     });
+
     window.location.replace(url.toString());
 }
 </script>
 """, height=0)
 
-# Now import the rest of your modules
 from supabase_client import supabase
 from data_agent import save_health_data
 from risk_agent import doctor_ai_agent
@@ -32,8 +31,6 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # ---------- CUSTOM STYLE ----------
-st.set_page_config(page_title="HeartVigil AI", layout="wide")
-
 st.markdown("""
 <style>
 .stButton > button {
@@ -93,12 +90,12 @@ def login_signup():
                 reset_email = st.text_input("Enter your email")
                 if st.button("Send reset link"):
                     try:
-                        # ✅ Force query parameters by adding a dummy query string
+                        # Replace with your deployed app URL
                         supabase.auth.reset_password_for_email(
                             reset_email,
                             {"redirect_to": "https://heartvigil-15.streamlit.app"}
                         )
-                        st.success("✅ Reset email sent! Check your inbox.")
+                        st.success("✅ Reset email sent!")
                         st.session_state.show_reset_popover = False
                     except Exception as e:
                         st.error(f"Error: {e}")
@@ -121,10 +118,8 @@ def login_signup():
                 st.error(f"Signup failed: {e}")
 
 def show_reset_password():
-    st.title("Reset Password")
-    params = st.query_params
-    st.write("🔍 Params in reset page:", dict(params))   # temporary debug
-    st.title("Reset Password")
+    st.title("🔐 Reset Your Password")
+
     params = st.query_params
 
     access_token = params.get("access_token")
@@ -133,35 +128,60 @@ def show_reset_password():
     type_param = params.get("type")
 
     if type_param == "recovery" or access_token or token:
+
         try:
             if access_token and refresh_token:
                 supabase.auth.set_session(access_token, refresh_token)
+
             elif token:
-                supabase.auth.verify_otp({"token": token, "type": "recovery"})
+                supabase.auth.verify_otp({
+                    "token": token,
+                    "type": "recovery"
+                })
+
             else:
-                st.error("Invalid link")
+                st.error("Invalid or expired reset link")
                 return
+
         except Exception as e:
             st.error(f"Session error: {e}")
             return
 
+        # 🔥 PASSWORD FORM
         with st.form("reset_form"):
-            new_password = st.text_input("New password", type="password")
-            confirm_password = st.text_input("Confirm password", type="password")
-            if st.form_submit_button("Update password"):
-                if new_password != confirm_password:
-                    st.error("Passwords do not match")
-                elif len(new_password) < 6:
-                    st.error("Minimum 6 characters required")
-                else:
-                    try:
-                        supabase.auth.update_user({"password": new_password})
-                        st.success("✅ Password updated successfully!")
-                        st.query_params.clear()
+            new_password = st.text_input("New Password", type="password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+
+            submitted = st.form_submit_button("Update Password")
+
+        if submitted:
+
+            if new_password != confirm_password:
+                st.error("Passwords do not match")
+
+            elif len(new_password) < 6:
+                st.error("Password must be at least 6 characters")
+
+            else:
+                try:
+                    supabase.auth.update_user({
+                        "password": new_password
+                    })
+
+                    st.success("✅ Password updated successfully!")
+
+                    # ✅ Clear tokens
+                    st.query_params.clear()
+
+                    # 🔥 SHOW RETURN BUTTON
+                    if st.button("🔙 Return to Login"):
                         st.session_state.auth_session = None
+                        st.session_state.page = "login"
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Update failed: {e}")
+
+                except Exception as e:
+                    st.error(f"Update failed: {e}")
+
     else:
         st.error("Invalid or expired reset link")
 
@@ -172,15 +192,20 @@ def logout():
 
 # ---------- ROUTING ----------
 params = st.query_params
-if (
-    params.get("access_token")
-    or params.get("refresh_token")
+
+is_reset_flow = (
+    params.get("access_token") is not None
+    or params.get("refresh_token") is not None
     or params.get("type") == "recovery"
-    or params.get("token")
-):
+    or params.get("token") is not None
+)
+
+# ✅ PRIORITY: RESET PAGE FIRST
+if is_reset_flow:
     show_reset_password()
     st.stop()
 
+# ✅ THEN LOGIN CHECK
 if not check_session():
     login_signup()
     st.stop()
