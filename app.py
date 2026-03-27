@@ -1,6 +1,28 @@
-# --- DEBUG: show query params on all pages ---
-st.write("🔍 Query params:", dict(st.query_params))
 import streamlit as st
+import streamlit.components.v1 as components
+
+# Must be the first Streamlit command
+st.set_page_config(page_title="HeartVigil AI", layout="wide")
+
+# --- DEBUG: show query params on all pages (you can remove this later) ---
+st.write("🔍 Query params:", dict(st.query_params))
+
+# --- Convert URL hash (#) to query parameters (for password reset links) ---
+components.html("""
+<script>
+const hash = window.location.hash.substring(1);
+if (hash && !window.location.search.includes("access_token")) {
+    const url = new URL(window.location);
+    const params = new URLSearchParams(hash);
+    params.forEach((value, key) => {
+        url.searchParams.set(key, value);
+    });
+    window.location.replace(url.toString());
+}
+</script>
+""", height=0)
+
+# Now import the rest of your modules
 from supabase_client import supabase
 from data_agent import save_health_data
 from risk_agent import doctor_ai_agent
