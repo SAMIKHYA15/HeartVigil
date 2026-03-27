@@ -4,8 +4,7 @@ import streamlit.components.v1 as components
 # Must be the first Streamlit command
 st.set_page_config(page_title="HeartVigil AI", layout="wide")
 
-# --- DEBUG: show query params on all pages (you can remove this later) ---
-st.write("🔍 Query params:", dict(st.query_params))
+
 
 # --- Convert URL hash (#) to query parameters (for password reset links) ---
 components.html("""
