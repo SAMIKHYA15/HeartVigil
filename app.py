@@ -74,18 +74,27 @@ def login_signup():
             if st.button("Forgot password?"):
                 st.session_state.show_reset_popover = True
 
+        # Show popover only if the flag is set
         if st.session_state.show_reset_popover:
-            with st.popover("Reset Password", opened=True):
+            with st.popover("Reset Password"):
                 reset_email = st.text_input("Enter your registered email")
-                if st.button("Send Reset Link"):
-                    try:
-                        supabase.auth.reset_password_for_email(
-                            reset_email, 
-                            {"redirect_to": "https://heartvigil-15.streamlit.app"}
-                        )
-                        st.success("✅ Reset link sent! Check your inbox.")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    if st.button("Send Reset Link"):
+                        try:
+                            supabase.auth.reset_password_for_email(
+                                reset_email, 
+                                {"redirect_to": "https://heartvigil-15.streamlit.app"}
+                            )
+                            st.success("✅ Reset link sent! Check your inbox.")
+                            st.session_state.show_reset_popover = False
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                with col_btn2:
+                    if st.button("Cancel"):
+                        st.session_state.show_reset_popover = False
+                        st.rerun()
 
     with tab2:
         email = st.text_input("Email", key="signup_email")
@@ -100,7 +109,7 @@ def login_signup():
                     st.info("Check your email to confirm your account.")
             except Exception as e:
                 st.error(f"Signup failed: {e}")
-
+                
 def show_reset_password():
     st.title("🔐 Set New Password")
     params = st.query_params
