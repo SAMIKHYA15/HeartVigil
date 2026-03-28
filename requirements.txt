@@ -7,3 +7,4 @@ joblib
 scikit-learn
 pdfplumber
 groq
+python-dotenv
