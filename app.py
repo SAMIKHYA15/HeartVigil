@@ -8,22 +8,40 @@ import time
 import re
 import requests
 import os
-from supabase_client import supabase
-from data_agent import save_health_data
-from risk_agent import doctor_ai_agent
-from reco_agent import generate_recommendations
-import monitor_agent
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# ========== AI HELPER (Placeholder) ==========
-def get_ai_response(prompt, model_name="gemini-2.0-flash"):
-    return "✨ AI insights are currently being generated. Stay tuned for personalised health recommendations!"
-
-# ========== PDF EXTRACTOR (Placeholder) ==========
-def parse_pdf_health_data(uploaded_file):
-    return {}
-
-# ========== PAGE CONFIG ==========
+# ========== PAGE CONFIG (MUST BE FIRST) ==========
 st.set_page_config(page_title="HeartVigil AI", layout="wide")
+
+# ========== SESSION STATE INITIALIZATION ==========
+def init_session_state():
+    """Initialize all session state variables with defaults."""
+    defaults = {
+        "page": "dashboard",
+        "auth_session": None,
+        "result": None,
+        "latest_data": None,
+        "extracted": {},
+        "otp_sent": False,
+        "otp_code": None,
+        "otp_timestamp": None,
+        "otp_contact": None,
+        "otp_contact_type": None,
+        "otp_resend_count": 0,
+        "otp_verified": False,
+        "otp_error": None,
+        "login_method": "Email",
+        "auth_mode": "login",
+        "form_initialized": False,
+        "show_reset_popover": False,
+    }
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
+init_session_state()  # Call initialization immediately
 
 # ========== JS HASH CONVERTER ==========
 components.html("""
@@ -40,6 +58,21 @@ if (hash && !window.location.search.includes("access_token")) {
 </script>
 """, height=0)
 
+# ========== IMPORTS THAT DEPEND ON SESSION STATE ==========
+from supabase_client import supabase
+from data_agent import save_health_data
+from risk_agent import doctor_ai_agent
+from reco_agent import generate_recommendations
+import monitor_agent
+
+# ========== AI HELPER (Placeholder) ==========
+def get_ai_response(prompt, model_name="gemini-2.0-flash"):
+    return "✨ AI insights are currently being generated. Stay tuned for personalised health recommendations!"
+
+# ========== PDF EXTRACTOR (Placeholder) ==========
+def parse_pdf_health_data(uploaded_file):
+    return {}
+
 # ========== LOAD ENV ==========
 try:
     from dotenv import load_dotenv
@@ -48,7 +81,6 @@ except ImportError:
     pass
 
 def get_secret(key: str, default=""):
-    """Returns secret from environment or st.secrets (always returns string)."""
     val = os.environ.get(key)
     if val is not None:
         return str(val)
@@ -109,27 +141,76 @@ DEFAULT_COUNTRY_INDEX = next((i for i, (name, _) in enumerate(COUNTRY_CODES) if 
 OTP_EXPIRY_SECONDS = 600
 MAX_RESEND_ATTEMPTS = 2
 
-# ========== SESSION STATE ==========
-defaults = {
-    "page": "dashboard",
-    "auth_session": None,
-    "result": None,
-    "latest_data": None,
-    "extracted": {},
-    "show_reset_popover": False,
-    "otp_sent": False,
-    "otp_code": None,
-    "otp_timestamp": None,
-    "otp_contact": None,
-    "otp_resend_count": 0,
-    "otp_verified": False,
-    "otp_error": None,
-    "login_method": "Email",
-    "auth_mode": "login",
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+# ========== EMAIL OTP FUNCTION ==========
+def send_otp_email(email, otp):
+    """Send a 4-digit OTP via email using SMTP."""
+    try:
+        smtp_server = get_secret("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(get_secret("SMTP_PORT", "587"))
+        sender_email = get_secret("SENDER_EMAIL", "")
+        sender_password = get_secret("SENDER_PASSWORD", "")
+        
+        if not sender_email or not sender_password:
+            print(f"[DEV] OTP for {email}: {otp}")
+            return True
+        
+        msg = MIMEMultipart()
+        msg["From"] = sender_email
+        msg["To"] = email
+        msg["Subject"] = "Your HeartVigil OTP Code"
+        
+        body = f"""
+        <html>
+        <body>
+            <h2>HeartVigil AI - Login OTP</h2>
+            <p>Your 4-digit OTP is: <b style="font-size: 24px; color: #6B46C1;">{otp}</b></p>
+            <p>This OTP is valid for 10 minutes.</p>
+            <p>If you didn't request this, please ignore this email.</p>
+            <br>
+            <p>Stay heart healthy! ❤️</p>
+            <p><i>HeartVigil AI Team</i></p>
+        </body>
+        </html>
+        """
+        
+        msg.attach(MIMEText(body, "html"))
+        
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        
+        return True
+    except Exception as e:
+        print(f"[EMAIL ERROR] {e}")
+        print(f"[DEV] OTP for {email}: {otp}")
+        return True
+
+# ========== SMS OTP FUNCTION ==========
+def send_otp_sms(phone_with_isd, otp):
+    """Send a 4-digit OTP via SMS using Fast2SMS."""
+    local_number = phone_with_isd.lstrip("+")
+    if local_number.startswith("91") and len(local_number) == 12:
+        local_number = local_number[2:]
+    elif len(local_number) == 11 and local_number.startswith("1"):
+        local_number = local_number[1:]
+    
+    fast2sms_key = get_secret("FAST2SMS_API_KEY", "")
+    if fast2sms_key and fast2sms_key != "" and len(local_number) == 10:
+        try:
+            resp = requests.post(
+                "https://www.fast2sms.com/dev/bulkV2",
+                headers={"authorization": fast2sms_key},
+                json={"route": "otp", "variables_values": otp, "numbers": local_number, "flash": 0},
+                timeout=10
+            )
+            if resp.json().get("return", False):
+                return True
+        except Exception as e:
+            print(f"[SMS ERROR] {e}")
+    
+    print(f"[DEV] OTP for {phone_with_isd}: {otp}")
+    return True
 
 # ========== OTP HELPERS ==========
 def generate_otp(length=4):
@@ -153,147 +234,122 @@ def seconds_remaining():
     remaining = OTP_EXPIRY_SECONDS - elapsed
     return max(0, int(remaining))
 
-def send_otp_email(email, otp):
-    """Send OTP via email using native Supabase OTP or fallback to console."""
-    use_native = get_secret("SUPABASE_USE_NATIVE_OTP", "false").lower() == "true"
-    if use_native:
-        try:
-            supabase.auth.sign_in_with_otp({
-                "email": email,
-                "options": {"should_create_user": True}
-            })
-            st.session_state.otp_code = "__SUPABASE_NATIVE__"
-            return True
-        except Exception as e:
-            print(f"[EMAIL OTP ERROR] {e}")
-            return False
-    # Fallback: print to console (dev mode)
-    print(f"[DEV – OTP for {email}: {otp}")
-    return True
-
-def send_otp_sms(phone_with_isd, otp):
-    """Send OTP via SMS using Fast2SMS or fallback to console."""
-    local_number = phone_with_isd.lstrip("+")
-    if local_number.startswith("91") and len(local_number) == 12:
-        local_number = local_number[2:]
-    fast2sms_key = get_secret("FAST2SMS_API_KEY", "")
-    if fast2sms_key and fast2sms_key != "" and len(local_number) == 10:
-        try:
-            resp = requests.post(
-                "https://www.fast2sms.com/dev/bulkV2",
-                headers={"authorization": fast2sms_key},
-                json={"route": "otp", "variables_values": otp, "numbers": local_number, "flash": 0},
-                timeout=10
-            )
-            return resp.json().get("return", False)
-        except Exception as e:
-            print(f"[SMS ERROR] {e}")
-            return False
-    # Fallback: print to console (dev mode)
-    print(f"[DEV – OTP for {phone_with_isd}: {otp}")
-    return True
-
-def dispatch_otp(contact, method):
+def dispatch_otp(contact, contact_type, country_code=None):
     otp = generate_otp()
     st.session_state.otp_code = otp
     st.session_state.otp_timestamp = time.time()
     st.session_state.otp_contact = contact
+    st.session_state.otp_contact_type = contact_type
     st.session_state.otp_error = None
-    if method == "Email":
+    
+    if contact_type == "email":
         return send_otp_email(contact, otp)
     else:
-        return send_otp_sms(contact, otp)
+        full_phone = contact
+        if country_code and not contact.startswith("+"):
+            full_phone = f"{country_code}{contact}"
+        return send_otp_sms(full_phone, otp)
 
 def reset_otp_state():
     st.session_state.otp_sent = False
     st.session_state.otp_code = None
     st.session_state.otp_timestamp = None
     st.session_state.otp_contact = None
+    st.session_state.otp_contact_type = None
     st.session_state.otp_resend_count = 0
     st.session_state.otp_verified = False
     st.session_state.otp_error = None
 
-def resolve_session_after_otp(contact, method):
+# ========== AUTHENTICATION ==========
+def check_session():
+    return st.session_state.auth_session is not None
+
+def create_or_get_user(contact, contact_type):
+    """Create or retrieve user from Supabase 'users' table."""
     try:
-        if method == "Email":
-            return True, {"email": contact, "id": contact}, None
+        if contact_type == "email":
+            response = supabase.table("users").select("*").eq("email", contact).execute()
         else:
-            return True, {"phone": contact, "id": contact}, None
+            response = supabase.table("users").select("*").eq("phone", contact).execute()
+        
+        if response.data:
+            user = response.data[0]
+            return True, user, None
+        else:
+            if contact_type == "email":
+                new_user = supabase.table("users").insert({"email": contact}).execute()
+            else:
+                new_user = supabase.table("users").insert({"phone": contact}).execute()
+            
+            if new_user.data:
+                return True, new_user.data[0], None
+            else:
+                return False, None, "Failed to create user"
+                
     except Exception as e:
         return False, None, str(e)
 
-def _build_pseudo_session(user_info, contact, method):
+def create_pseudo_session(user_info, contact, contact_type):
     class _User:
         def __init__(self, uid, email, phone):
             self.id = uid
             self.email = email
             self.phone = phone
             self.created_at = None
+            self.user_metadata = {}
+            if email:
+                self.user_metadata["email"] = email
+            if phone:
+                self.user_metadata["phone"] = phone
+    
     class _Session:
         def __init__(self, user):
             self.user = user
-            self.access_token = None
-            self.refresh_token = None
-    uid = user_info.get("id", contact)
-    email = contact if method == "Email" else None
-    phone = contact if method == "Phone" else None
+            self.access_token = "custom_token"
+            self.refresh_token = "custom_refresh"
+    
+    uid = user_info.get("id") if isinstance(user_info, dict) else str(user_info)
+    email = contact if contact_type == "email" else None
+    phone = contact if contact_type == "phone" else None
+    
     return _Session(_User(uid, email, phone))
-
-def _clear_form_state():
-    keys_to_clear = ["age", "sex", "cp", "trestbps", "chol", "fbs", "restecg",
-                     "thalach", "exang", "oldpeak", "slope", "ca", "thal"]
-    for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
-    st.session_state.extracted = {}
-
-# ========== AUTHENTICATION ==========
-def check_session():
-    return st.session_state.auth_session is not None
 
 def login_signup():
     st.title("HeartVigil AI")
-    tab_login, tab_signup = st.tabs(["Login", "Sign Up"])
-
-    for tab, mode in [(tab_login, "login"), (tab_signup, "signup")]:
-        with tab:
-            _render_otp_panel(mode)
-
-def _render_otp_panel(mode: str):
-    label = "Login" if mode == "login" else "Sign Up"
-    method = st.radio("Login with", ["Email", "Phone Number"], horizontal=True, key=f"{mode}_method")
-    contact_ready = False
+    st.markdown("### Login / Sign Up")
+    st.markdown("Enter your email or phone number to receive a 4-digit OTP.")
+    
+    method = st.radio("Login with", ["Email", "Phone Number"], horizontal=True, key="auth_method")
+    
     contact = ""
-
+    contact_ready = False
+    country_code = None
+    
     if method == "Email":
-        email_input = st.text_input("Email Address", placeholder="you@example.com", key=f"{mode}_email")
-        contact = email_input.strip()
+        contact = st.text_input("Email Address", placeholder="you@example.com", key="auth_email")
         contact_ready = is_valid_email(contact)
         if contact and not contact_ready:
             st.caption("⚠️ Please enter a valid email address.")
     else:
         col_country, col_phone = st.columns([2, 3])
         with col_country:
-            country_choice = st.selectbox("Country", COUNTRY_OPTIONS, index=DEFAULT_COUNTRY_INDEX, key=f"{mode}_country")
+            country_choice = st.selectbox("Country", COUNTRY_OPTIONS, index=DEFAULT_COUNTRY_INDEX, key="auth_country")
+            country_code = COUNTRY_CODES[COUNTRY_OPTIONS.index(country_choice)][1]
         with col_phone:
-            phone_input = st.text_input("Phone Number (10 digits)", placeholder="9876543210", max_chars=10, key=f"{mode}_phone")
-        isd_code = COUNTRY_CODES[COUNTRY_OPTIONS.index(country_choice)][1]
-        local_phone = phone_input.strip()
-        contact = f"{isd_code}{local_phone}"
-        contact_ready = is_valid_phone(local_phone)
-        if local_phone and not contact_ready:
+            phone_input = st.text_input("Phone Number (10 digits)", placeholder="9876543210", max_chars=10, key="auth_phone")
+        contact = phone_input.strip()
+        contact_ready = is_valid_phone(contact)
+        if contact and not contact_ready:
             st.caption("⚠️ Enter exactly 10 digits (no spaces or dashes).")
-
-    method_key = "Email" if method == "Email" else "Phone"
-
+    
     if not st.session_state.otp_sent or st.session_state.otp_contact != contact:
-        send_btn = st.button(f"Send OTP", key=f"{mode}_send_otp", disabled=not contact_ready, use_container_width=True)
+        send_btn = st.button("Send OTP", disabled=not contact_ready, use_container_width=True)
         if send_btn and contact_ready:
-            ok = dispatch_otp(contact, method_key)
+            contact_type = "email" if method == "Email" else "phone"
+            ok = dispatch_otp(contact, contact_type, country_code)
             if ok:
                 st.session_state.otp_sent = True
                 st.session_state.otp_resend_count = 0
-                st.session_state.auth_mode = mode
                 st.success(f"✅ OTP sent to your {method.lower()}. Valid for 10 minutes.")
                 st.rerun()
             else:
@@ -302,15 +358,15 @@ def _render_otp_panel(mode: str):
         remaining = seconds_remaining()
         if remaining > 0:
             components.html(f"""
-<div id="otp-banner" style="background:#1e3a5f; border:1px solid #2d6a9f; border-radius:6px; padding:10px 16px; font-size:15px; color:#90caf9; margin-bottom:4px;">
-  OTP sent to <b style="color:#ffffff">{st.session_state.otp_contact}</b>.
-  Expires in <b id="countdown" style="color:#facc15; font-size:16px;">--:--</b>
+<div style="background:#1e3a5f; border:1px solid #2d6a9f; border-radius:6px; padding:10px 16px; margin-bottom:4px;">
+  OTP sent to <b>{st.session_state.otp_contact}</b>.
+  Expires in <b style="color:#facc15;" id="countdown">{remaining // 60:02d}:{remaining % 60:02d}</b>
 </div>
 <script>
   var remaining = {remaining};
   function tick() {{
     if (remaining <= 0) {{
-      document.getElementById('otp-banner').innerHTML = '⏰ <b>OTP has expired.</b> Click <b>Resend OTP</b> below.';
+      document.getElementById('countdown').innerHTML = 'Expired';
       return;
     }}
     var m = Math.floor(remaining / 60);
@@ -321,18 +377,19 @@ def _render_otp_panel(mode: str):
   }}
   tick();
 </script>
-""", height=60)
+""", height=80)
         else:
             st.warning("⏰ OTP has expired. Click **Resend OTP** to get a new one.")
-
-        otp_input = st.text_input("Enter 4-digit OTP", max_chars=4, placeholder="••••", key=f"{mode}_otp_input")
+        
+        otp_input = st.text_input("Enter 4-digit OTP", max_chars=4, placeholder="••••", key="otp_input")
+        
         if st.session_state.otp_error:
             st.error(st.session_state.otp_error)
-
-        verify_col, resend_col, change_col = st.columns([1, 1, 1])
-
-        with verify_col:
-            if st.button(f"Verify & {label}", key=f"{mode}_verify", use_container_width=True):
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("Verify", use_container_width=True):
                 if otp_is_expired():
                     st.session_state.otp_error = "OTP has expired. Please request a new one."
                     st.rerun()
@@ -340,30 +397,32 @@ def _render_otp_panel(mode: str):
                     st.session_state.otp_error = "❌ Incorrect OTP. Please try again."
                     st.rerun()
                 else:
-                    success, user_info, err = resolve_session_after_otp(st.session_state.otp_contact, method_key)
+                    contact_type = st.session_state.otp_contact_type
+                    success, user_info, err = create_or_get_user(st.session_state.otp_contact, contact_type)
                     if success:
-                        st.session_state.auth_session = _build_pseudo_session(user_info, st.session_state.otp_contact, method_key)
-                        _clear_form_state()
+                        st.session_state.auth_session = create_pseudo_session(user_info, st.session_state.otp_contact, contact_type)
                         reset_otp_state()
-                        st.success("✅ Logged in successfully!")
+                        st.success("✅ Login successful!")
                         st.rerun()
                     else:
                         st.session_state.otp_error = f"Authentication error: {err}"
                         st.rerun()
-
-        with resend_col:
+        
+        with col2:
             resends_left = MAX_RESEND_ATTEMPTS - st.session_state.otp_resend_count
-            if st.button(f"Resend OTP ({resends_left} left)", key=f"{mode}_resend", disabled=resends_left <= 0, use_container_width=True):
-                ok = dispatch_otp(st.session_state.otp_contact, method_key)
+            disabled = resends_left <= 0
+            if st.button(f"Resend OTP ({resends_left} left)", disabled=disabled, use_container_width=True):
+                contact_type = st.session_state.otp_contact_type
+                ok = dispatch_otp(st.session_state.otp_contact, contact_type, country_code)
                 if ok:
                     st.session_state.otp_resend_count += 1
                     st.success("OTP resent successfully!")
                     st.rerun()
                 else:
                     st.error("Failed to resend OTP.")
-
-        with change_col:
-            if st.button("Change Contact", key=f"{mode}_change", use_container_width=True):
+        
+        with col3:
+            if st.button("Change Contact", use_container_width=True):
                 reset_otp_state()
                 st.rerun()
 
@@ -418,6 +477,7 @@ def logout():
         pass
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    init_session_state()
     st.rerun()
 
 # ========== ROUTING ==========
@@ -585,12 +645,14 @@ def show_assessment():
     st.title("Heart Health Assessment")
     st.markdown("Fields marked with * are required.")
 
-    if "form_initialized" not in st.session_state:
+    if not st.session_state.form_initialized:
         st.session_state.form_initialized = True
         for f in ["age", "trestbps", "chol", "thalach", "oldpeak", "ca"]:
-            st.session_state[f] = ""
+            if f not in st.session_state:
+                st.session_state[f] = ""
         for s in ["sex", "cp", "fbs", "restecg", "exang", "slope", "thal"]:
-            st.session_state[s] = "Select"
+            if s not in st.session_state:
+                st.session_state[s] = "Select"
 
     def is_empty(val):
         return val == "" or val == "Select"
@@ -763,4 +825,155 @@ def show_risk_analysis():
         st.subheader("AI Insights")
         st.write(result["ai_explanation"])
     if st.button("Take New Assessment"):
-        st
+        st.session_state.page = "assessment"
+        st.rerun()
+
+# ========== MONITORING ==========
+def show_monitoring():
+    st.title("📈 Health Monitoring & Trends")
+    st.markdown("Track your health metrics over time and receive early warnings.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("Start date", value=None, key="start_date")
+    with col2:
+        end_date = st.date_input("End date", value=None, key="end_date")
+    start_str = start_date.isoformat() if start_date else None
+    end_str = end_date.isoformat() if end_date else None
+    
+    records = monitor_agent.get_user_history(user_id, start_str, end_str)
+    if len(records) == 0:
+        st.info("No assessments found for the selected period.")
+        if st.button("Go to Assessment"):
+            st.session_state.page = "assessment"
+            st.rerun()
+        return
+
+    st.subheader("Key Metrics")
+    metrics = ["trestbps", "chol", "thalach", "oldpeak"]
+    metric_labels = {"trestbps": "Resting BP (mmHg)", "chol": "Cholesterol (mg/dL)",
+                     "thalach": "Max Heart Rate (bpm)", "oldpeak": "ST Depression"}
+    cols = st.columns(4)
+    for i, metric in enumerate(metrics):
+        latest_val, percent, symbol = monitor_agent.compute_trends(records, metric)
+        if latest_val is not None:
+            if metric in ["trestbps", "chol", "oldpeak"]:
+                color = "#EF4444" if percent > 0 else ("#10B981" if percent < 0 else "#F59E0B")
+            else:
+                color = "#10B981" if percent > 0 else ("#EF4444" if percent < 0 else "#F59E0B")
+            delta = f"{symbol} {abs(percent):.1f}%" if percent != 0 else "No change"
+            with cols[i]:
+                st.metric(metric_labels[metric], f"{latest_val:.1f}" if isinstance(latest_val, float) else latest_val, delta)
+        else:
+            with cols[i]:
+                st.metric(metric_labels[metric], "N/A")
+
+    st.subheader("📊 Latest Values vs Safe Ranges")
+    latest = records[-1]
+    chart_data = monitor_agent.generate_comparison_data(latest)
+    if chart_data:
+        df_chart = pd.DataFrame(chart_data)
+        fig = go.Figure()
+        for _, row in df_chart.iterrows():
+            if row["Direction"] == "lower":
+                color = "#10B981" if row["Your Value"] <= row["Safe Limit"] else (
+                    "#F59E0B" if row["Your Value"] <= row["Safe Limit"] * 1.1 else "#EF4444")
+            else:
+                color = "#10B981" if row["Your Value"] >= row["Safe Limit"] else (
+                    "#F59E0B" if row["Your Value"] >= row["Safe Limit"] * 0.9 else "#EF4444")
+            fig.add_trace(go.Bar(name=row["Field"], x=[row["Field"]], y=[row["Your Value"]],
+                                 marker_color=color,
+                                 text=f"{row['Your Value']} (limit {row['Safe Limit']})", textposition="outside"))
+        fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False, height=400)
+        st.plotly_chart(fig, width='stretch')
+    else:
+        st.info("No numeric fields available for comparison.")
+
+    if len(records) > 1:
+        st.subheader("📈 Trends Over Time")
+        metric = st.selectbox("Select a metric", metrics, format_func=lambda x: metric_labels[x])
+        df_trend = monitor_agent.generate_trend_data(records, [metric])
+        if metric in df_trend.columns:
+            df_sel = df_trend[["created_at", metric]].dropna()
+            if not df_sel.empty:
+                rolling_avg = df_sel[metric].rolling(window=3, min_periods=1).mean()
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_sel["created_at"], y=df_sel[metric],
+                                         mode='lines+markers', name='Actual',
+                                         line=dict(color='#6B46C1'), marker=dict(size=8)))
+                fig.add_trace(go.Scatter(x=df_sel["created_at"], y=rolling_avg,
+                                         mode='lines', name='3-point Rolling Average',
+                                         line=dict(color='#F59E0B', dash='dash')))
+                fig.update_layout(title=f"{metric_labels[metric]} Over Time",
+                                  xaxis_title="Date", yaxis_title=metric_labels[metric],
+                                  hovermode='x unified', height=450)
+                st.plotly_chart(fig, width='stretch')
+            else:
+                st.warning(f"No data available for {metric_labels[metric]}")
+        else:
+            st.warning(f"Field {metric} not found in data.")
+    else:
+        st.info("You have only one assessment. After your second assessment, you'll see trend charts here.")
+
+    alerts = monitor_agent.detect_trends(records)
+    if alerts:
+        st.subheader("🔔 Alerts & Insights")
+        enhanced_alerts = monitor_agent.enhance_alerts(alerts)
+        for alert in enhanced_alerts:
+            if "⚠️" in alert:
+                st.warning(alert)
+            else:
+                st.success(alert)
+    else:
+        st.success("No concerning trends detected. Keep up the good work!")
+
+    if len(records) >= 2:
+        st.subheader("🤖 AI Summary")
+        with st.spinner("Generating insights..."):
+            summary = monitor_agent.generate_ai_summary(records)
+        if summary:
+            st.info(summary)
+        else:
+            st.write("AI summary currently unavailable.")
+
+# ========== RECOMMENDATIONS ==========
+def show_recommendations():
+    st.title("Recommendations")
+    st.markdown("Personalised health advice based on your latest assessment.")
+
+    data = st.session_state.latest_data
+    if not data:
+        response = supabase.table("health_records").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+        if response.data:
+            latest = response.data[0]
+            data = {k: latest.get(k) for k in ["age","sex","cp","trestbps","chol","fbs","restecg",
+                                                "thalach","exang","oldpeak","slope","ca","thal"]}
+            st.session_state.latest_data = data
+
+    if not data:
+        st.info("No health data available. Please submit an assessment first.")
+        if st.button("Go to Assessment"):
+            st.session_state.page = "assessment"
+            st.rerun()
+        return
+
+    recs = generate_recommendations(data)
+    for rec in recs:
+        st.write(f"• {rec}")
+
+# ========== PAGE ROUTER ==========
+page = st.session_state.page
+if page == "dashboard":
+    show_dashboard()
+elif page == "assessment":
+    show_assessment()
+elif page == "risk_analysis":
+    show_risk_analysis()
+elif page == "data_agent":
+    show_data_agent()
+elif page == "monitoring":
+    show_monitoring()
+elif page == "recommendations":
+    show_recommendations()
+else:
+    show_dashboard()
