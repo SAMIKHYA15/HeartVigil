@@ -188,83 +188,47 @@ def send_otp_email(email, otp):
 
 # ========== SMS OTP FUNCTION ==========
 def send_otp_sms(phone_with_isd, otp):
-    """Send a 4-digit OTP via SMS using Fast2SMS - OTP Route."""
-    
-    # Extract local number (remove + and country code)
+    # Clean number (get last 10 digits)
     local_number = phone_with_isd.lstrip("+")
+    if len(local_number) > 10:
+        local_number = local_number[-10:]
     
-    # Handle Indian numbers (+91)
-    if local_number.startswith("91") and len(local_number) == 12:
-        local_number = local_number[2:]  # Remove 91 prefix
-    # Handle US numbers (+1)
-    elif len(local_number) == 11 and local_number.startswith("1"):
-        local_number = local_number[1:]  # Remove 1 prefix
-    
-    print(f"[SMS DEBUG] Cleaned number: {local_number}, OTP: {otp}")
-    
-    # Get API key from secrets
     fast2sms_key = get_secret("FAST2SMS_API_KEY", "")
     
     if not fast2sms_key:
-        print("[SMS ERROR] No Fast2SMS API key found")
-        st.session_state.otp_error = "SMS service not configured."
-        return False
-    
-    if len(local_number) != 10:
-        print(f"[SMS ERROR] Invalid phone number length: {len(local_number)} digits")
-        st.session_state.otp_error = f"Please enter a valid 10-digit phone number."
+        print("No API key found")
         return False
     
     try:
-        # Fast2SMS OTP API - use route=otp
+        # USE OTP ROUTE (not dlt)
         url = "https://www.fast2sms.com/dev/bulkV2"
         
-        # Headers with API key
+        payload = {
+            "route": "otp",                    # ✅ This is the fix
+            "variables_values": otp,
+            "numbers": local_number,
+            "flash": 0
+        }
+        
         headers = {
             "authorization": fast2sms_key,
             "Content-Type": "application/json"
         }
         
-        # Payload for OTP route - this is the CORRECT format
-        payload = {
-            "route": "otp",           # OTP route (not dlt)
-            "variables_values": otp,  # Your 4-digit OTP
-            "numbers": local_number,  # 10-digit number without country code
-            "flash": 0                # 0 = normal SMS, 1 = flash
-        }
-        
-        print(f"[SMS DEBUG] Sending to: {local_number}")
-        print(f"[SMS DEBUG] Payload: {payload}")
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        
-        print(f"[SMS DEBUG] Response status: {response.status_code}")
-        print(f"[SMS DEBUG] Response: {response.text}")
+        response = requests.post(url, headers=headers, json=payload)
         
         if response.status_code == 200:
             result = response.json()
             if result.get("return"):
-                print("[SMS SUCCESS] OTP sent successfully!")
                 return True
             else:
-                error_msg = result.get("message", "Unknown error")
-                print(f"[SMS ERROR] Fast2SMS error: {error_msg}")
-                st.session_state.otp_error = f"SMS error: {error_msg}"
+                print(f"Error: {result.get('message')}")
                 return False
-        else:
-            print(f"[SMS ERROR] HTTP {response.status_code}")
-            st.session_state.otp_error = f"Service error: {response.status_code}"
-            return False
-            
-    except requests.exceptions.Timeout:
-        print("[SMS ERROR] Timeout")
-        st.session_state.otp_error = "SMS service timeout. Please try again."
         return False
+        
     except Exception as e:
-        print(f"[SMS ERROR] {e}")
-        st.session_state.otp_error = f"Error: {e}"
+        print(f"SMS error: {e}")
         return False
-    
 # ========== OTP HELPERS ==========
 def generate_otp(length=4):
     return "".join(random.choices(string.digits, k=length))
