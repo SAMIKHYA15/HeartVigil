@@ -11,34 +11,33 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# ========== PAGE CONFIG (MUST BE FIRST) ==========
-st.set_page_config(
-    page_title="HeartVigil AI",
-    page_icon="❤️",
-    layout="wide"
-)
+# ========== PAGE CONFIG ==========
+st.set_page_config(page_title="HeartVigil AI", page_icon="❤️", layout="wide")
 
 st.markdown("""
 <style>
-.block-container {
-    padding-top: 1rem;
-}
-.sidebar-logo {
-    text-align: center;
-    padding: 20px 0;
-    border-bottom: 1px solid #e0e0e0;
-    margin-bottom: 20px;
-}
-.sidebar-logo img {
-    max-width: 200px;
-    width: 100%;
-    height: auto;
-}
+.block-container { padding-top: 1rem; }
+.sidebar-logo { text-align: center; padding: 20px 0; border-bottom: 1px solid #e0e0e0; margin-bottom: 20px; }
+.sidebar-logo img { max-width: 200px; width: 100%; height: auto; }
+/* Senior-friendly sizing */
+body { font-size: 15px; }
+.stButton > button { background-color: #6B46C1 !important; color: white !important; border: none !important; border-radius: 12px !important; padding: 0.75rem !important; font-weight: 500 !important; font-size: 1rem !important; }
+.stButton > button:hover { background-color: #553C9A !important; }
+/* Risk banner */
+.risk-banner-improved { background: linear-gradient(135deg, #10B981, #059669); color: white; padding: 1rem; border-radius: 12px; margin-bottom: 1rem; text-align: center; }
+.risk-banner-worsened { background: linear-gradient(135deg, #EF4444, #DC2626); color: white; padding: 1rem; border-radius: 12px; margin-bottom: 1rem; text-align: center; }
+.risk-banner-first { background: linear-gradient(135deg, #6B46C1, #553C9A); color: white; padding: 1rem; border-radius: 12px; margin-bottom: 1rem; text-align: center; }
+.risk-banner-stable { background: linear-gradient(135deg, #F59E0B, #D97706); color: white; padding: 1rem; border-radius: 12px; margin-bottom: 1rem; text-align: center; }
+/* Progress cards */
+.progress-card { background: white; border-radius: 12px; padding: 1rem; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.progress-card-improved { border-left: 4px solid #10B981; }
+.progress-card-worsened { border-left: 4px solid #EF4444; }
+.progress-card-stable { border-left: 4px solid #6B7280; }
+.progress-number { font-size: 2rem; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 def show_sidebar_logo():
-    """Display logo only in sidebar"""
     try:
         if os.path.exists("logo.png"):
             st.markdown("<div class='sidebar-logo'>", unsafe_allow_html=True)
@@ -50,7 +49,6 @@ def show_sidebar_logo():
         st.markdown("<div class='sidebar-logo'><h3>❤️ HeartVigil</h3></div>", unsafe_allow_html=True)
 
 def show_login_logo():
-    """Display logo only on login page"""
     try:
         if os.path.exists("logo.png"):
             st.image("logo.png", width=250)
@@ -60,9 +58,8 @@ def show_login_logo():
     except Exception:
         st.markdown("<h1 style='text-align: center;'>❤️ HeartVigil AI</h1>", unsafe_allow_html=True)
 
-# ========== SESSION STATE INITIALIZATION ==========
+# ========== SESSION STATE ==========
 def init_session_state():
-    """Initialize all session state variables with defaults."""
     defaults = {
         "page": "dashboard",
         "auth_session": None,
@@ -78,11 +75,15 @@ def init_session_state():
         "otp_error": None,
         "form_initialized": False,
         "show_reset_popover": False,
+        "show_results": False,  # <-- ADD THIS LINE
+        "age_input": "", "trestbps_input": "", "chol_input": "", "thalach_input": "", "oldpeak_input": "", "ca_input": "",
+        "sex_select": "Select", "cp_select": "Select", "fbs_select": "Select", "restecg_select": "Select",
+        "exang_select": "Select", "slope_select": "Select", "thal_select": "Select",
+        "delta": None, "progress_summary": None,
     }
     for key, default_value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = default_value
-
 init_session_state()
 
 # ========== JS HASH CONVERTER ==========
@@ -92,9 +93,7 @@ const hash = window.location.hash.substring(1);
 if (hash && !window.location.search.includes("access_token")) {
     const url = new URL(window.location);
     const params = new URLSearchParams(hash);
-    params.forEach((value, key) => {
-        url.searchParams.set(key, value);
-    });
+    params.forEach((value, key) => { url.searchParams.set(key, value); });
     window.location.replace(url.toString());
 }
 </script>
@@ -102,20 +101,15 @@ if (hash && !window.location.search.includes("access_token")) {
 
 # ========== IMPORTS ==========
 from supabase_client import supabase
-from data_agent import save_health_data
-from risk_agent import doctor_ai_agent
+from data_agent import save_health_data, compute_delta
+from risk_agent import doctor_ai_agent, explain_risk_change
 from reco_agent import generate_recommendations
 import monitor_agent
+from pdf_extractor import parse_pdf_health_data
 
-# ========== AI HELPER ==========
 def get_ai_response(prompt, model_name="gemini-2.0-flash"):
     return "✨ AI insights are currently being generated."
 
-# ========== PDF EXTRACTOR ==========
-def parse_pdf_health_data(uploaded_file):
-    return {}
-
-# ========== LOAD ENV ==========
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -132,69 +126,41 @@ def get_secret(key: str, default=""):
     except Exception:
         return str(default)
 
-# ========== CUSTOM STYLE ==========
-st.markdown("""
-<style>
-.stButton > button {
-    background-color: #6B46C1 !important;
-    color: white !important;
-    border: none !important;
-}
-.stButton > button:hover {
-    background-color: #553C9A !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
 OTP_EXPIRY_SECONDS = 600
 MAX_RESEND_ATTEMPTS = 2
 
-# ========== EMAIL OTP FUNCTION ==========
 def send_otp_email(email, otp):
-    """Send 4-digit OTP via email using SMTP."""
     try:
         smtp_server = get_secret("SMTP_SERVER", "smtp.gmail.com")
         smtp_port = int(get_secret("SMTP_PORT", "587"))
         sender_email = get_secret("SENDER_EMAIL", "")
         sender_password = get_secret("SENDER_PASSWORD", "")
-        
         if not sender_email or not sender_password:
             print(f"[DEV] OTP for {email}: {otp}")
             return True
-        
         msg = MIMEMultipart()
         msg["From"] = sender_email
         msg["To"] = email
         msg["Subject"] = "Your HeartVigil OTP Code"
-        
         body = f"""
-        <html>
-        <body>
+        <html><body>
             <h2>HeartVigil AI - Login OTP</h2>
             <p>Your 4-digit OTP is: <b style="font-size: 24px; color: #6B46C1;">{otp}</b></p>
             <p>This OTP is valid for 10 minutes.</p>
-            <p>If you didn't request this, please ignore this email.</p>
-            <br>
             <p>Stay heart healthy! ❤️</p>
-            <p><i>HeartVigil AI Team</i></p>
-        </body>
-        </html>
+        </body></html>
         """
-        
         msg.attach(MIMEText(body, "html"))
-        
         with smtplib.SMTP(smtp_server, smtp_port) as server:
             server.starttls()
             server.login(sender_email, sender_password)
             server.send_message(msg)
-        
         return True
     except Exception as e:
         print(f"[EMAIL ERROR] {e}")
         print(f"[DEV] OTP for {email}: {otp}")
         return True
 
-# ========== OTP HELPERS ==========
 def generate_otp(length=4):
     return "".join(random.choices(string.digits, k=length))
 
@@ -231,25 +197,16 @@ def reset_otp_state():
     st.session_state.otp_error = None
 
 def create_or_get_user(email):
-    """Create or retrieve user from Supabase 'users' table."""
     try:
         response = supabase.table("users").select("*").eq("email", email).execute()
-        
         if response.data:
-            user = response.data[0]
-            return True, user, None
-        else:
-            new_user = supabase.table("users").insert({"email": email}).execute()
-            if new_user.data:
-                return True, new_user.data[0], None
-            else:
-                return False, None, "Failed to create user"
-                
+            return True, response.data[0], None
+        new_user = supabase.table("users").insert({"email": email}).execute()
+        if new_user.data:
+            return True, new_user.data[0], None
+        return False, None, "Failed to create user"
     except Exception as e:
-        fallback_user = {
-            "id": f"fallback_{email.replace('@', '_').replace('.', '_')}",
-            "email": email,
-        }
+        fallback_user = {"id": f"fallback_{email.replace('@', '_').replace('.', '_')}", "email": email}
         return True, fallback_user, None
 
 def create_pseudo_session(user_info, email):
@@ -267,98 +224,58 @@ def create_pseudo_session(user_info, email):
     uid = user_info.get("id") if isinstance(user_info, dict) else str(user_info)
     return _Session(_User(uid, email))
 
-# ========== AUTHENTICATION ==========
 def check_session():
     return st.session_state.auth_session is not None
 
 def login_signup():
-    # Show logo only on login page
     show_login_logo()
     st.markdown("### Login / Sign Up")
     st.markdown("Enter your email address to receive a 4-digit OTP.")
-    
     email = st.text_input("Email Address", placeholder="you@example.com", key="auth_email")
     email_ready = is_valid_email(email)
-    
     if email and not email_ready:
         st.caption("⚠️ Please enter a valid email address.")
-    
     if not st.session_state.otp_sent or st.session_state.otp_email != email:
-        send_btn = st.button("Send OTP", disabled=not email_ready, use_container_width=True)
-        if send_btn and email_ready:
-            ok = dispatch_otp(email)
-            if ok:
+        if st.button("Send OTP", disabled=not email_ready, use_container_width=True):
+            if dispatch_otp(email):
                 st.session_state.otp_sent = True
                 st.session_state.otp_resend_count = 0
                 st.success(f"✅ OTP sent to {email}. Valid for 10 minutes.")
                 st.rerun()
             else:
-                st.error("Failed to send OTP. Please try again.")
+                st.error("Failed to send OTP.")
     else:
         remaining = seconds_remaining()
         if remaining > 0:
-            components.html(f"""
-<div style="background:#1e3a5f; border:1px solid #2d6a9f; border-radius:6px; padding:10px 16px; margin-bottom:4px;">
-  OTP sent to <b>{st.session_state.otp_email}</b>.
-  Expires in <b style="color:#facc15;" id="countdown">{remaining // 60:02d}:{remaining % 60:02d}</b>
-</div>
-<script>
-  var remaining = {remaining};
-  function tick() {{
-    if (remaining <= 0) {{
-      document.getElementById('countdown').innerHTML = 'Expired';
-      return;
-    }}
-    var m = Math.floor(remaining / 60);
-    var s = remaining % 60;
-    document.getElementById('countdown').textContent = (m<10?'0':'')+m+':'+(s<10?'0':'')+s;
-    remaining--;
-    setTimeout(tick, 1000);
-  }}
-  tick();
-</script>
-""", height=80)
+            st.info(f"⏰ OTP expires in {remaining // 60}:{remaining % 60:02d}")
         else:
-            st.warning("⏰ OTP has expired. Click **Resend OTP** to get a new one.")
-        
+            st.warning("OTP expired. Click Resend.")
         otp_input = st.text_input("Enter 4-digit OTP", max_chars=4, placeholder="••••", key="otp_input")
-        
-        if st.session_state.otp_error:
-            st.error(st.session_state.otp_error)
-        
         col1, col2, col3 = st.columns(3)
-        
         with col1:
             if st.button("Verify", use_container_width=True):
                 if otp_is_expired():
-                    st.session_state.otp_error = "OTP has expired. Please request a new one."
-                    st.rerun()
+                    st.error("OTP expired.")
                 elif otp_input.strip() != st.session_state.otp_code:
-                    st.session_state.otp_error = "❌ Incorrect OTP. Please try again."
-                    st.rerun()
+                    st.error("Incorrect OTP.")
                 else:
                     success, user_info, err = create_or_get_user(st.session_state.otp_email)
                     if success:
                         st.session_state.auth_session = create_pseudo_session(user_info, st.session_state.otp_email)
                         reset_otp_state()
-                        st.success("✅ Login successful!")
+                        st.success("Login successful!")
                         st.rerun()
                     else:
-                        st.session_state.otp_error = f"Authentication error: {err}"
-                        st.rerun()
-        
+                        st.error(f"Authentication error: {err}")
         with col2:
             resends_left = MAX_RESEND_ATTEMPTS - st.session_state.otp_resend_count
-            disabled = resends_left <= 0
-            if st.button(f"Resend OTP ({resends_left} left)", disabled=disabled, use_container_width=True):
-                ok = dispatch_otp(st.session_state.otp_email)
-                if ok:
+            if st.button(f"Resend OTP ({resends_left} left)", disabled=resends_left <= 0, use_container_width=True):
+                if dispatch_otp(st.session_state.otp_email):
                     st.session_state.otp_resend_count += 1
-                    st.success("OTP resent successfully!")
+                    st.success("OTP resent!")
                     st.rerun()
                 else:
-                    st.error("Failed to resend OTP.")
-        
+                    st.error("Failed to resend.")
         with col3:
             if st.button("Change Email", use_container_width=True):
                 reset_otp_state()
@@ -371,7 +288,6 @@ def show_reset_password():
     refresh_token = params.get("refresh_token")
     token = params.get("token")
     type_param = params.get("type")
-
     if type_param == "recovery" or access_token or token:
         try:
             if access_token and refresh_token:
@@ -379,34 +295,30 @@ def show_reset_password():
             elif token:
                 supabase.auth.verify_otp({"token": token, "type": "recovery"})
             else:
-                st.error("Invalid or expired reset link")
+                st.error("Invalid link")
                 return
         except Exception as e:
             st.error(f"Session error: {e}")
             return
-
         with st.form("reset_form"):
             new_password = st.text_input("New Password", type="password")
             confirm_password = st.text_input("Confirm Password", type="password")
-            submitted = st.form_submit_button("Update Password")
-
-        if submitted:
-            if new_password != confirm_password:
-                st.error("Passwords do not match")
-            elif len(new_password) < 6:
-                st.error("Password must be at least 6 characters")
-            else:
-                try:
-                    supabase.auth.update_user({"password": new_password})
-                    st.success("✅ Password updated successfully!")
-                    st.query_params.clear()
-                    if st.button("🔙 Return to Login"):
+            if st.form_submit_button("Update Password"):
+                if new_password != confirm_password:
+                    st.error("Passwords do not match")
+                elif len(new_password) < 6:
+                    st.error("Minimum 6 characters")
+                else:
+                    try:
+                        supabase.auth.update_user({"password": new_password})
+                        st.success("Password updated!")
+                        st.query_params.clear()
                         st.session_state.auth_session = None
                         st.rerun()
-                except Exception as e:
-                    st.error(f"Update failed: {e}")
+                    except Exception as e:
+                        st.error(f"Update failed: {e}")
     else:
-        st.error("Invalid or expired reset link")
+        st.error("Invalid reset link")
 
 def logout():
     try:
@@ -422,58 +334,50 @@ def logout():
 params = st.query_params
 is_reset_flow = (params.get("access_token") or params.get("refresh_token") or
                  params.get("type") == "recovery" or params.get("token"))
-
 if is_reset_flow:
     show_reset_password()
     st.stop()
-
 if not check_session():
     login_signup()
     st.stop()
 
-# ========== LOGGED IN – FULL APP ==========
+# ========== LOGGED IN ==========
 user_id = st.session_state.auth_session.user.id
 user_email = st.session_state.auth_session.user.email
 user_created_at = getattr(st.session_state.auth_session.user, "created_at", None)
 
-# ========== SIDEBAR WITH LOGO ==========
 with st.sidebar:
-    show_sidebar_logo()  # Logo only in sidebar
+    show_sidebar_logo()
     st.markdown("## Navigation")
-    if st.button("Dashboard", use_container_width=True):
+    if st.button("📊 Dashboard", use_container_width=True):
         st.session_state.page = "dashboard"
-    if st.button("Assessment", use_container_width=True):
+    if st.button("📝 Assessment", use_container_width=True):
         st.session_state.page = "assessment"
-    if st.button("Risk Analysis", use_container_width=True):
+    if st.button("📈 Risk Analysis", use_container_width=True):
         st.session_state.page = "risk_analysis"
-    if st.button("Data Agent", use_container_width=True):
+    if st.button("💾 Data Agent", use_container_width=True):
         st.session_state.page = "data_agent"
-    if st.button("Monitoring", use_container_width=True):
+    if st.button("📉 Monitoring", use_container_width=True):
         st.session_state.page = "monitoring"
-    if st.button("Recommendations", use_container_width=True):
+    if st.button("💡 Recommendations", use_container_width=True):
         st.session_state.page = "recommendations"
     st.markdown("---")
     st.caption("⚠️ Educational demo. Not for medical use.")
 
-# Profile button in top right
 top_col1, top_col2, top_col3 = st.columns([1, 6, 1])
 with top_col3:
-    with st.popover("👤 Profile", use_container_width=True):
-        if user_email:
-            st.write(f"**Email:** {user_email}")
+    with st.popover("👤 Profile", width='stretch'):
+        st.write(f"**Email:** {user_email}")
         if user_created_at:
             st.write(f"**Joined:** {str(user_created_at)[:10]}")
-        st.markdown("---")
         if st.button("Logout", use_container_width=True):
             logout()
 
 # ========== VALIDATION RANGES ==========
 VALID_RANGES = {
-    "age": (1, 100), "sex": (0, 1), "cp": (0, 3),
-    "trestbps": (80, 200), "chol": (100, 600),
-    "fbs": (0, 1), "restecg": (0, 2), "thalach": (60, 220),
-    "exang": (0, 1), "oldpeak": (0.0, 6.2),
-    "slope": (0, 2), "ca": (0, 3), "thal": (1, 3)
+    "age": (1, 100), "sex": (0, 1), "cp": (0, 3), "trestbps": (80, 200),
+    "chol": (100, 600), "fbs": (0, 1), "restecg": (0, 2), "thalach": (60, 220),
+    "exang": (0, 1), "oldpeak": (0.0, 6.2), "slope": (0, 2), "ca": (0, 3), "thal": (1, 3)
 }
 
 def validate_and_clean_extracted(extracted):
@@ -518,59 +422,144 @@ def validate_all_fields(data):
         if field in data and data[field] is not None:
             if isinstance(data[field], (int, float)):
                 if data[field] < low or data[field] > high:
-                    errors.append(f"{field} value {data[field]} is outside the allowed range ({low}–{high})")
+                    errors.append(f"{field} value {data[field]} is outside range ({low}–{high})")
     return len(errors) == 0, errors
 
-# ========== DASHBOARD (No center logo) ==========
+# ========== DASHBOARD ==========
 def show_dashboard():
     st.title("Your Heart Health Dashboard")
     
-    if st.session_state.result:
-        result = st.session_state.result
-        col1, col2 = st.columns(2)
-        with col1:
-            risk_label = result["risk_label"]
-            color = {"LOW": "#10B981", "MEDIUM": "#F59E0B"}.get(risk_label, "#EF4444")
-            st.markdown(f"<h2 style='color:{color};'>Risk: {risk_label}</h2>", unsafe_allow_html=True)
-            st.metric("Probability", f"{result['probability']:.1f}%")
-        with col2:
-            st.subheader("Why this risk?")
-            for r in result["reasons"]:
-                st.write(f"• {r}")
-
-        if st.session_state.latest_data:
-            st.subheader("Your Values vs Safe Ranges")
-            safe_limits = {
-                "trestbps": ("Resting BP (mmHg)", 120, "lower"),
-                "chol": ("Cholesterol (mg/dL)", 200, "lower"),
-                "thalach": ("Max Heart Rate (bpm)", 150, "higher"),
-                "oldpeak": ("ST Depression", 1.0, "lower")
-            }
-            chart_data = []
-            for field, (label, limit, direction) in safe_limits.items():
-                val = st.session_state.latest_data.get(field)
-                if val is not None:
-                    if direction == "lower":
-                        color = "#10B981" if val <= limit else ("#F59E0B" if val <= limit * 1.1 else "#EF4444")
-                    else:
-                        color = "#10B981" if val >= limit else ("#F59E0B" if val >= limit * 0.9 else "#EF4444")
-                    chart_data.append({"Field": label, "Your Value": val, "Safe Limit": limit, "Color": color})
-            if chart_data:
-                df_chart = pd.DataFrame(chart_data)
-                fig = go.Figure()
-                for _, row in df_chart.iterrows():
-                    fig.add_trace(go.Bar(name=row["Field"], x=[row["Field"]], y=[row["Your Value"]],
-                                         marker_color=row["Color"],
-                                         text=f"{row['Your Value']} (limit {row['Safe Limit']})", textposition="outside"))
-                fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+    # Always show welcome message first
+    st.markdown("## Welcome to HeartVigil AI")
+    st.write("Get a personalised heart health assessment in minutes.")
+    
+    # Check if user has any assessments
+    response = supabase.table("health_records").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+    
+    if response.data:
+        latest = response.data[0]
+        data = {k: latest.get(k) for k in ["age","sex","cp","trestbps","chol","fbs","restecg",
+                                            "thalach","exang","oldpeak","slope","ca","thal"]}
         
-        if st.button("Take New Assessment", use_container_width=True):
-            st.session_state.page = "assessment"
-            st.rerun()
+        # Compute delta and progress summary for Phase 2
+        delta = compute_delta(data, user_id)
+        st.session_state.delta = delta
+        progress_summary = monitor_agent.build_progress_summary(delta)
+        st.session_state.progress_summary = progress_summary
+        
+        # Get risk result
+        result = doctor_ai_agent(data)
+        if delta.get("has_previous") and delta.get("prev_risk_score"):
+            result["prev_probability"] = delta["prev_risk_score"]
+            result = explain_risk_change(result, delta)
+        st.session_state.result = result
+        st.session_state.latest_data = data
+        
+        # Show button to view results
+        if st.button("View My Latest Results", type="primary", use_container_width=True):
+            st.session_state.show_results = True
+        
+        # Show results if button clicked
+        if st.session_state.get("show_results", False):
+            st.markdown("---")
+            
+            # ========== RISK DIRECTION BANNER ==========
+            risk_direction = result.get("risk_direction", "first_submission")
+            banner_class = "risk-banner-first"
+            banner_text = "Here is your latest heart health assessment."
+            if risk_direction == "improved":
+                banner_class = "risk-banner-improved"
+                banner_text = "↓ Your risk has IMPROVED since your last submission!"
+            elif risk_direction == "worsened":
+                banner_class = "risk-banner-worsened"
+                banner_text = "↑ Your risk has INCREASED since your last submission."
+            elif risk_direction == "stable":
+                banner_class = "risk-banner-stable"
+                banner_text = "→ Your risk is STABLE compared to your last submission."
+            
+            st.markdown(f'<div class="{banner_class}"><h3>{banner_text}</h3></div>', unsafe_allow_html=True)
+            
+            # ========== PROGRESS CARDS ==========
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                improved_count = progress_summary.get("improved_count", 0)
+                st.markdown(f'''
+                <div class="progress-card progress-card-improved">
+                    <div class="progress-number" style="color:#10B981;">↑ {improved_count}</div>
+                    <div>Improved</div>
+                    <small>values got better</small>
+                </div>
+                ''', unsafe_allow_html=True)
+            with col2:
+                worsened_count = progress_summary.get("worsened_count", 0)
+                st.markdown(f'''
+                <div class="progress-card progress-card-worsened">
+                    <div class="progress-number" style="color:#EF4444;">↓ {worsened_count}</div>
+                    <div>Worsened</div>
+                    <small>values need attention</small>
+                </div>
+                ''', unsafe_allow_html=True)
+            with col3:
+                stable_count = progress_summary.get("stable_count", 0)
+                st.markdown(f'''
+                <div class="progress-card progress-card-stable">
+                    <div class="progress-number" style="color:#6B7280;">→ {stable_count}</div>
+                    <div>Stable</div>
+                    <small>values unchanged</small>
+                </div>
+                ''', unsafe_allow_html=True)
+            
+            # ========== RISK SCORE SECTION ==========
+            col1, col2 = st.columns(2)
+            with col1:
+                risk_label = result["risk_label"]
+                color = result["risk_color"]
+                st.markdown(f"<h1 style='color:{color}; font-size: 2rem;'>Risk: {risk_label}</h1>", unsafe_allow_html=True)
+                st.metric("Probability", f"{result['probability']:.1f}%")
+                if result.get("prev_probability"):
+                    change = result["probability"] - result["prev_probability"]
+                    st.metric("Change since last time", f"{'+' if change > 0 else ''}{change:.1f}%", 
+                             delta_color="inverse" if change > 0 else "normal")
+                if result.get("change_driver"):
+                    st.info(f"📌 {result['change_driver']}")
+            with col2:
+                st.subheader("Why this risk?")
+                for r in result["reasons"]:
+                    st.write(f"• {r}")
+            
+            # ========== COMPARISON CHART ==========
+            if st.session_state.latest_data:
+                st.subheader("Your Values vs Safe Ranges")
+                safe_limits = {
+                    "trestbps": ("Resting BP (mmHg)", 120, "lower"),
+                    "chol": ("Cholesterol (mg/dL)", 200, "lower"),
+                    "thalach": ("Max Heart Rate (bpm)", 150, "higher"),
+                    "oldpeak": ("ST Depression", 1.0, "lower")
+                }
+                chart_data = []
+                for field, (label, limit, direction) in safe_limits.items():
+                    val = st.session_state.latest_data.get(field)
+                    if val is not None:
+                        if direction == "lower":
+                            color = "#10B981" if val <= limit else ("#F59E0B" if val <= limit * 1.1 else "#EF4444")
+                        else:
+                            color = "#10B981" if val >= limit else ("#F59E0B" if val >= limit * 0.9 else "#EF4444")
+                        chart_data.append({"Field": label, "Your Value": val, "Safe Limit": limit, "Color": color})
+                if chart_data:
+                    df_chart = pd.DataFrame(chart_data)
+                    fig = go.Figure()
+                    for _, row in df_chart.iterrows():
+                        fig.add_trace(go.Bar(name=row["Field"], x=[row["Field"]], y=[row["Your Value"]],
+                                             marker_color=row["Color"],
+                                             text=f"{row['Your Value']} (limit {row['Safe Limit']})", textposition="outside"))
+                    fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            if st.button("Take New Assessment", use_container_width=True):
+                st.session_state.page = "assessment"
+                st.session_state.show_results = False
+                st.rerun()
     else:
-        st.markdown("## Welcome to HeartVigil AI")
-        st.write("Get a personalised heart health assessment in minutes.")
         st.markdown("""
         ### Features:
         - 📊 **Health Assessment**: Get your heart health risk score
@@ -583,20 +572,55 @@ def show_dashboard():
         if st.button("Start Your Assessment", type="primary", use_container_width=True):
             st.session_state.page = "assessment"
             st.rerun()
-
-# ========== ASSESSMENT (No center logo) ==========
+# ========== ASSESSMENT ==========
 def show_assessment():
     st.title("Heart Health Assessment")
     st.markdown("Fields marked with * are required.")
-
+    
+    # PDF Upload Section
+    st.subheader("📄 Upload Medical Report (Optional)")
+    uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"], key="pdf_uploader_assessment")
+    if uploaded_file is not None:
+        with st.spinner("Reading and extracting data from PDF..."):
+            extracted = parse_pdf_health_data(uploaded_file)
+            if extracted:
+                cleaned, invalid_fields = validate_and_clean_extracted(extracted)
+                if invalid_fields:
+                    st.warning(f"Invalid extracted values: {', '.join(invalid_fields)}")
+                for key, value in cleaned.items():
+                    if value is not None:
+                        if key in ["age", "trestbps", "chol", "thalach", "oldpeak", "ca"]:
+                            st.session_state[f"{key}_input"] = str(value)
+                        elif key == "sex":
+                            st.session_state["sex_select"] = "Male" if value == 1 else "Female"
+                        elif key == "cp":
+                            cp_options = ["Select", "Typical angina", "Atypical angina", "Non-anginal pain", "Asymptomatic"]
+                            if 0 <= value <= 3:
+                                st.session_state["cp_select"] = cp_options[value + 1]
+                        elif key == "fbs":
+                            st.session_state["fbs_select"] = "Yes" if value == 1 else "No"
+                        elif key == "restecg":
+                            restecg_options = ["Select", "Normal", "ST-T abnormality", "LV hypertrophy"]
+                            if 0 <= value <= 2:
+                                st.session_state["restecg_select"] = restecg_options[value + 1]
+                        elif key == "exang":
+                            st.session_state["exang_select"] = "Yes" if value == 1 else "No"
+                        elif key == "slope":
+                            slope_options = ["Select", "Upsloping", "Flat", "Downsloping"]
+                            if 0 <= value <= 2:
+                                st.session_state["slope_select"] = slope_options[value + 1]
+                        elif key == "thal":
+                            thal_options = ["Select", "Normal", "Fixed defect", "Reversible defect"]
+                            if 1 <= value <= 3:
+                                st.session_state["thal_select"] = thal_options[value]
+                st.success("PDF data extracted! Review and edit below.")
+            else:
+                st.warning("Could not extract data. Please fill manually.")
+    
+    st.markdown("---")
+    
     if not st.session_state.form_initialized:
         st.session_state.form_initialized = True
-        for f in ["age", "trestbps", "chol", "thalach", "oldpeak", "ca"]:
-            if f not in st.session_state:
-                st.session_state[f] = ""
-        for s in ["sex", "cp", "fbs", "restecg", "exang", "slope", "thal"]:
-            if s not in st.session_state:
-                st.session_state[s] = "Select"
 
     def is_empty(val):
         return val == "" or val == "Select"
@@ -604,111 +628,106 @@ def show_assessment():
     with st.form("health_form"):
         col1, col2 = st.columns(2)
         missing_fields = []
-
         with col1:
-            age = st.text_input("Age *", key="age")
+            age = st.text_input("Age *", key="age_input")
             if is_empty(age): missing_fields.append("Age")
-            sex_label = st.selectbox("Sex *", ["Select", "Female", "Male"], key="sex")
+            sex_label = st.selectbox("Sex *", ["Select", "Female", "Male"], key="sex_select")
             if is_empty(sex_label): missing_fields.append("Sex")
             cp_options = ["Select", "Typical angina", "Atypical angina", "Non-anginal pain", "Asymptomatic"]
-            cp_label = st.selectbox("Chest pain type *", cp_options, key="cp")
+            cp_label = st.selectbox("Chest pain type *", cp_options, key="cp_select")
             if is_empty(cp_label): missing_fields.append("Chest Pain")
-            trestbps = st.text_input("Resting blood pressure * (mmHg)", key="trestbps")
+            trestbps = st.text_input("Resting blood pressure * (mmHg)", key="trestbps_input")
             if is_empty(trestbps): missing_fields.append("Blood Pressure")
-            chol = st.text_input("Cholesterol * (mg/dL)", key="chol")
+            chol = st.text_input("Cholesterol * (mg/dL)", key="chol_input")
             if is_empty(chol): missing_fields.append("Cholesterol")
-            fbs_label = st.selectbox("Fasting blood sugar > 120 mg/dL", ["Select", "No", "Yes"], key="fbs")
-            restecg_label = st.selectbox("Resting ECG", ["Select", "Normal", "ST-T abnormality", "LV hypertrophy"], key="restecg")
-
+            fbs_label = st.selectbox("Fasting blood sugar > 120 mg/dL", ["Select", "No", "Yes"], key="fbs_select")
+            restecg_label = st.selectbox("Resting ECG", ["Select", "Normal", "ST-T abnormality", "LV hypertrophy"], key="restecg_select")
         with col2:
-            thalach = st.text_input("Max heart rate * (bpm)", key="thalach")
+            thalach = st.text_input("Max heart rate * (bpm)", key="thalach_input")
             if is_empty(thalach): missing_fields.append("Max Heart Rate")
-            exang_label = st.selectbox("Exercise induced angina *", ["Select", "No", "Yes"], key="exang")
+            exang_label = st.selectbox("Exercise induced angina *", ["Select", "No", "Yes"], key="exang_select")
             if is_empty(exang_label): missing_fields.append("Exercise Angina")
-            oldpeak = st.text_input("ST depression (mm)", key="oldpeak")
-            slope_label = st.selectbox("Slope", ["Select", "Upsloping", "Flat", "Downsloping"], key="slope")
-            ca = st.text_input("Major vessels (0-3)", key="ca")
-            thal_label = st.selectbox("Thalassemia", ["Select", "Normal", "Fixed defect", "Reversible defect"], key="thal")
-
+            oldpeak = st.text_input("ST depression (mm)", key="oldpeak_input")
+            slope_label = st.selectbox("Slope", ["Select", "Upsloping", "Flat", "Downsloping"], key="slope_select")
+            ca = st.text_input("Major vessels (0-3)", key="ca_input")
+            thal_label = st.selectbox("Thalassemia", ["Select", "Normal", "Fixed defect", "Reversible defect"], key="thal_select")
         all_filled = len(missing_fields) == 0
         submitted = st.form_submit_button("Analyse My Heart Health", use_container_width=True)
-
+    
     if submitted:
         if not all_filled:
-            st.error(f"⚠️ Mandatory fields missing: {', '.join(missing_fields)}")
+            st.error(f"Mandatory fields missing: {', '.join(missing_fields)}")
             st.stop()
-
         try:
             data = {
-                "age": int(age),
-                "sex": 1 if sex_label == "Male" else 0,
-                "cp": cp_options.index(cp_label) - 1,
-                "trestbps": int(trestbps),
-                "chol": int(chol),
-                "fbs": 1 if fbs_label == "Yes" else 0,
+                "age": int(age), "sex": 1 if sex_label == "Male" else 0,
+                "cp": cp_options.index(cp_label) - 1, "trestbps": int(trestbps),
+                "chol": int(chol), "fbs": 1 if fbs_label == "Yes" else 0,
                 "restecg": ["Select", "Normal", "ST-T abnormality", "LV hypertrophy"].index(restecg_label) - 1,
-                "thalach": int(thalach),
-                "exang": 1 if exang_label == "Yes" else 0,
+                "thalach": int(thalach), "exang": 1 if exang_label == "Yes" else 0,
                 "oldpeak": float(oldpeak) if oldpeak else 0.0,
                 "slope": ["Select", "Upsloping", "Flat", "Downsloping"].index(slope_label) - 1,
                 "ca": int(ca) if ca else 0,
                 "thal": ["Select", "Normal", "Fixed defect", "Reversible defect"].index(thal_label)
             }
         except Exception as e:
-            st.error(f"⚠️ Invalid input format: {e}")
+            st.error(f"Invalid input format: {e}")
             st.stop()
-
         valid, errors = validate_all_fields(data)
         if not valid:
             for err in errors:
                 st.error(err)
             st.stop()
-
         with st.spinner("Analysing your health data..."):
+            # Get previous risk score for delta
+            prev_response = supabase.table("health_records").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+            prev_risk_score = prev_response.data[0].get("risk_score") if prev_response.data else None
+            
             success, result = save_health_data(data, user_id)
             if not success:
-                st.error(f"Failed to save data: {result}")
+                st.error(f"Failed to save: {result}")
                 st.stop()
-
+            
+            # Compute delta with previous risk score
+            delta = compute_delta(data, user_id)
+            if prev_risk_score is not None:
+                delta["prev_risk_score"] = prev_risk_score
+            st.session_state.delta = delta
+            
             doctor_result = doctor_ai_agent(data)
+            if delta.get("has_previous"):
+                doctor_result = explain_risk_change(doctor_result, delta)
             st.session_state.result = doctor_result
             st.session_state.latest_data = data
             st.session_state.form_initialized = False
-            st.success("✅ Assessment complete!")
+            st.success("Assessment complete!")
             st.balloons()
             st.session_state.page = "dashboard"
             st.rerun()
 
-# ========== DATA AGENT (No center logo) ==========
+# ========== DATA AGENT ==========
 def show_data_agent():
     st.title("Data Agent – Your Health Records")
-    
     with st.spinner("Loading your health records..."):
         response = supabase.table("health_records").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(5).execute()
         records = response.data
-
     if not records:
         st.info("No assessments yet. Start your first assessment!")
         if st.button("Start Your Assessment", use_container_width=True):
             st.session_state.page = "assessment"
             st.rerun()
         return
-
     if len(records) >= 2:
-        with st.spinner("Generating AI summary..."):
-            summary = get_ai_response(f"Summarize health trends from: {records}")
-            if summary:
-                st.subheader("🤖 AI Summary")
-                st.info(summary)
-
+        summary = get_ai_response(f"Summarize health trends from: {records}")
+        if summary:
+            st.subheader("🤖 AI Summary")
+            st.info(summary)
     st.subheader("Recent Assessments (last 5)")
     history_data = [{"Date": rec["created_at"][:10], "Age": rec.get("age"),
                      "Sex": "Male" if rec.get("sex") == 1 else "Female",
                      "BP": rec.get("trestbps"), "Chol": rec.get("chol"),
-                     "HR": rec.get("thalach"), "Chest Pain": rec.get("cp")}
-                    for rec in records]
+                     "HR": rec.get("thalach"), "Chest Pain": rec.get("cp")} for rec in records]
     st.dataframe(pd.DataFrame(history_data), use_container_width=True)
-
     st.subheader("Comparison Chart (Latest Assessment)")
     latest = records[0]
     safe_limits = {"trestbps": ("Resting BP (mmHg)", 120, "lower"), "chol": ("Cholesterol (mg/dL)", 200, "lower"),
@@ -732,10 +751,9 @@ def show_data_agent():
         fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
-# ========== RISK ANALYSIS (No center logo) ==========
+# ========== RISK ANALYSIS ==========
 def show_risk_analysis():
     st.title("Risk Analysis")
-    
     result = st.session_state.result
     if not result:
         with st.spinner("Loading latest assessment..."):
@@ -748,17 +766,14 @@ def show_risk_analysis():
                 st.session_state.result = result
             else:
                 result = None
-
     if not result:
         st.info("No health assessment found. Please submit your first assessment.")
         if st.button("Go to Assessment", use_container_width=True):
             st.session_state.page = "assessment"
             st.rerun()
         return
-
     risk_label, probability = result["risk_label"], result["probability"]
     label_color = {"LOW": "#10B981", "MEDIUM": "#F59E0B"}.get(risk_label, "#EF4444")
-    
     fig = go.Figure(go.Indicator(mode="gauge+number", value=probability, domain={'x': [0, 1], 'y': [0, 1]},
                                  title={'text': "Risk Probability"},
                                  gauge={'axis': {'range': [0, 100]}, 'bar': {'color': label_color},
@@ -768,64 +783,47 @@ def show_risk_analysis():
                                         'threshold': {'line': {'color': "black", 'width': 4}, 'value': probability}}))
     fig.update_layout(height=300)
     st.plotly_chart(fig, use_container_width=True)
-    
     st.markdown(f"<h2 style='text-align:center;color:{label_color};'>Risk Level: {risk_label}</h2>", unsafe_allow_html=True)
-    
     if result.get("reasons"):
         st.subheader("Why this risk?")
         for r in result["reasons"]:
             st.write(f"• {r}")
-    
     if result.get("ai_explanation"):
         st.subheader("🤖 AI Insights")
         st.write(result["ai_explanation"])
-    
     if st.button("Take New Assessment", use_container_width=True):
         st.session_state.page = "assessment"
         st.rerun()
 
-# ========== MONITORING (No center logo) ==========
+# ========== MONITORING ==========
 def show_monitoring():
     st.title("📈 Health Monitoring & Trends")
-    st.markdown("Track your health metrics over time and receive early warnings.")
-
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("Start date", value=None, key="start_date")
+        start_date = st.date_input("Start date", value=None)
     with col2:
-        end_date = st.date_input("End date", value=None, key="end_date")
+        end_date = st.date_input("End date", value=None)
     start_str = start_date.isoformat() if start_date else None
     end_str = end_date.isoformat() if end_date else None
-    
-    with st.spinner("Fetching your health records..."):
+    with st.spinner("Fetching records..."):
         records = monitor_agent.get_user_history(user_id, start_str, end_str)
-    
     if len(records) == 0:
-        st.info("No assessments found for the selected period.")
+        st.info("No assessments found.")
         if st.button("Go to Assessment", use_container_width=True):
             st.session_state.page = "assessment"
             st.rerun()
         return
-
     st.subheader("Key Metrics")
     metrics = ["trestbps", "chol", "thalach", "oldpeak"]
-    metric_labels = {"trestbps": "Resting BP (mmHg)", "chol": "Cholesterol (mg/dL)",
-                     "thalach": "Max Heart Rate (bpm)", "oldpeak": "ST Depression"}
+    metric_labels = {"trestbps": "Resting BP", "chol": "Cholesterol", "thalach": "Max HR", "oldpeak": "ST Depression"}
     cols = st.columns(4)
-    for i, metric in enumerate(metrics):
-        latest_val, percent, symbol = monitor_agent.compute_trends(records, metric)
-        if latest_val is not None:
-            if metric in ["trestbps", "chol", "oldpeak"]:
-                color = "#EF4444" if percent > 0 else ("#10B981" if percent < 0 else "#F59E0B")
-            else:
-                color = "#10B981" if percent > 0 else ("#EF4444" if percent < 0 else "#F59E0B")
-            delta = f"{symbol} {abs(percent):.1f}%" if percent != 0 else "No change"
+    for i, m in enumerate(metrics):
+        latest_val, pct, sym = monitor_agent.compute_trends(records, m)
+        if latest_val:
+            color = "#EF4444" if pct > 0 else ("#10B981" if pct < 0 else "#F59E0B")
             with cols[i]:
-                st.metric(metric_labels[metric], f"{latest_val:.1f}" if isinstance(latest_val, float) else latest_val, delta)
-        else:
-            with cols[i]:
-                st.metric(metric_labels[metric], "N/A")
-
+                st.metric(metric_labels[m], f"{latest_val:.1f}" if isinstance(latest_val, float) else latest_val,
+                         f"{sym} {abs(pct):.1f}%" if pct != 0 else "No change")
     st.subheader("📊 Latest Values vs Safe Ranges")
     latest = records[-1]
     chart_data = monitor_agent.generate_comparison_data(latest)
@@ -834,19 +832,14 @@ def show_monitoring():
         fig = go.Figure()
         for _, row in df_chart.iterrows():
             if row["Direction"] == "lower":
-                color = "#10B981" if row["Your Value"] <= row["Safe Limit"] else (
-                    "#F59E0B" if row["Your Value"] <= row["Safe Limit"] * 1.1 else "#EF4444")
+                color = "#10B981" if row["Your Value"] <= row["Safe Limit"] else ("#F59E0B" if row["Your Value"] <= row["Safe Limit"] * 1.1 else "#EF4444")
             else:
-                color = "#10B981" if row["Your Value"] >= row["Safe Limit"] else (
-                    "#F59E0B" if row["Your Value"] >= row["Safe Limit"] * 0.9 else "#EF4444")
+                color = "#10B981" if row["Your Value"] >= row["Safe Limit"] else ("#F59E0B" if row["Your Value"] >= row["Safe Limit"] * 0.9 else "#EF4444")
             fig.add_trace(go.Bar(name=row["Field"], x=[row["Field"]], y=[row["Your Value"]],
                                  marker_color=color,
                                  text=f"{row['Your Value']} (limit {row['Safe Limit']})", textposition="outside"))
         fig.update_layout(barmode="group", yaxis_title="Value", showlegend=False, height=400)
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No numeric fields available for comparison.")
-
     if len(records) > 1:
         st.subheader("📈 Trends Over Time")
         metric = st.selectbox("Select a metric", metrics, format_func=lambda x: metric_labels[x])
@@ -866,39 +859,24 @@ def show_monitoring():
                                   xaxis_title="Date", yaxis_title=metric_labels[metric],
                                   hovermode='x unified', height=450)
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning(f"No data available for {metric_labels[metric]}")
-        else:
-            st.warning(f"Field {metric} not found in data.")
-    else:
-        st.info("You have only one assessment. After your second assessment, you'll see trend charts here.")
-
     alerts = monitor_agent.detect_trends(records)
     if alerts:
         st.subheader("🔔 Alerts & Insights")
-        enhanced_alerts = monitor_agent.enhance_alerts(alerts)
-        for alert in enhanced_alerts:
-            if "⚠️" in alert:
-                st.warning(alert)
-            else:
-                st.success(alert)
+        for alert in monitor_agent.enhance_alerts(alerts):
+            st.warning(alert) if "⚠️" in alert else st.success(alert)
     else:
-        st.success("No concerning trends detected. Keep up the good work!")
-
+        st.success("No concerning trends detected.")
     if len(records) >= 2:
         st.subheader("🤖 AI Summary")
         with st.spinner("Generating insights..."):
             summary = monitor_agent.generate_ai_summary(records)
         if summary:
             st.info(summary)
-        else:
-            st.write("AI summary currently unavailable.")
 
-# ========== RECOMMENDATIONS (No center logo) ==========
+# ========== RECOMMENDATIONS ==========
 def show_recommendations():
     st.title("💡 Personalised Recommendations")
     st.markdown("Health advice based on your latest assessment.")
-
     data = st.session_state.latest_data
     if not data:
         with st.spinner("Loading your latest assessment..."):
@@ -908,20 +886,18 @@ def show_recommendations():
                 data = {k: latest.get(k) for k in ["age","sex","cp","trestbps","chol","fbs","restecg",
                                                     "thalach","exang","oldpeak","slope","ca","thal"]}
                 st.session_state.latest_data = data
-
     if not data:
         st.info("No health data available. Please submit an assessment first.")
         if st.button("Go to Assessment", use_container_width=True):
             st.session_state.page = "assessment"
             st.rerun()
         return
-
     with st.spinner("Generating personalised recommendations..."):
-        recs = generate_recommendations(data)
-    
+        risk_output = st.session_state.result
+        progress_summary = st.session_state.progress_summary
+        recs = generate_recommendations(data, risk_output, progress_summary)
     for i, rec in enumerate(recs, 1):
-        st.write(f"{i}. {rec}")
-    
+        st.markdown(f"**{i}.** {rec}")
     st.markdown("---")
     st.caption("💡 These recommendations are AI-generated and should be discussed with your healthcare provider.")
 
